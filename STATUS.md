@@ -2,8 +2,36 @@
 
 ## Where we are
 
-Phase 0 (host canvas seam) is functionally complete on both targets and
-*X-ready* on real SDL2, and `canvaswin` now shows a **real native macOS menu
+**Next: Phase 1 — ClassicNet network seam (host-first); phase order re-scoped
+(2026-09-09).** Remaining work is ordered **1) ClassicNet on the host →
+2) Tiger/Cocoa → 3) Classic**; the cross-build tool systems are the parallel
+enabling work (only host mbedTLS + ClassicNet's host slice are needed for
+step 1). The seam reuses the "escape SDL" pattern for networking: keep
+`gmrequest.c`/`gmcerts` untouched and reimplement the_Foundation's
+`iSocket`/`iTlsRequest` over ClassicNet's `CNTransport` vtable (`cn_darwin8`
+host/Tiger, `cn_ot` Classic, `cn_tls` mbedTLS, `CN_TLS_FORCE_TLS12=1`) behind
+the identical public API, with a `LAGRANGE_CLASSICNET` compile-time switch.
+Host-verified: ClassicNet's own host slice builds and **13/13 tests pass on
+this Mac** (incl. `test_darwin8`, the transport, and `test_h2_download`, real
+I/O); host mbedTLS (`mbedtls-host3`) is present. Plan: **N1** vendor ClassicNet
+host slice + host mbedTLS + a real-fetch smoke test → **N2** the
+`Socket`/`TlsRequest` seam → **N3** wire into `canvaswin` so the viewer
+actually fetches a Gemini page.
+
+**Typography is parked** (was a host-testable Phase-1 item). Classic renders
+**grayscale AA** (CopyBits has no per-pixel alpha → a software src-over
+composite over the GWorld buffer; see arcana); the 1-bit "Platinum-sharp" UI +
+pixel-aligned bitmap fontpack + the per-spec `smooth` machinery are deferred
+nice-to-haves. AA is the default, so no typography groundwork is needed for
+correctness.
+
+The Phase-0 viewer now defaults to a 1x (non-Retina) rasterization
+(`canvasmain.c`): `CANVAS_SCALE=1` → `pixelRatio=1`, and the HighDPI window
+still presents it at an integer 2x (crisp 2x2 blocks), to validate the 1x
+Cocoa/classic targets on this 2x-display Mac.
+
+Phase 0 (canvas seam) is functionally complete on both targets and *X-ready*
+on real SDL2, and `canvaswin` now shows a **real native macOS menu
 bar** (the Ph0.5 menu-contract milestone). The seam is build-level: the
 widget kit compiles against stub SDL headers in `src/ui/canvas/include/`; at
 compile time one of three backends provides the bodies: (1) real SDL2 via

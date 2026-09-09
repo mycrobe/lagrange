@@ -23,7 +23,8 @@ with one implementation per target:
 skyjake:   platform_abstraction (mac/linux/win) → assumes SDL2
 ours:      canvas_seam   stub SDL headers ↔ real backend (sdlview / Aqua / Toolbox)
            native_menu   canvasmenu contract ↔ per-target impl (macos=AppKit, classic=Menu Manager)
-           network_seam  ClassicNet CNTransport ↔ cn_ot (OS8/9) / cn_darwin8 (Tiger)
+           network_seam  the_Foundation iSocket/iTlsRequest ↦ CNTransport
+                         (cn_ot OS8/9 · cn_darwin8 host+Tiger · cn_tls mbedTLS)
 ```
 
 - **Canvas seam**: the widget kit compiles against stub SDL headers; the shim
@@ -33,7 +34,15 @@ ours:      canvas_seam   stub SDL headers ↔ real backend (sdlview / Aqua / Too
 - **Native menu**: SDL2 has *no* native-menu API, so menus talk straight to
   the OS UI (AppKit `NSMenu` on mac, Menu Manager `InsertMenu`/
   `SetMenuItemText`/`SetMenuItemCmdKey`/`CheckItem` on Classic), not SDL.
-- **Network**: honest replacement via a vtable, not SDL.
+- **Network**: lagrange drives every fetch through the_Foundation's
+  `iTlsRequest`/`iSocket` (`gmrequest.c`, a `Stream` subclass + an Object),
+  so the seam keeps `gmrequest.c`/`gmcerts` *untouched* and reimplements
+  just those two classes over ClassicNet's `CNTransport` vtable
+  (`poll`/`send`/`recv`/`close`). `socket.c` backend = a `Stream` whose I/O
+  drives a transport (`cn_ot` Classic, `cn_darwin8` host/Tiger); `tlsrequest.c`
+  backend wraps `cn_tls` (mbedTLS, `CN_TLS_FORCE_TLS12=1`) above it. A
+  `LAGRANGE_CLASSICNET` switch picks it for the canvas build (stock `app`
+  keeps OpenSSL). Honest replacement via a vtable, not SDL.
 
 **Menu-specific decisions (why this shape):**
 
@@ -225,6 +234,13 @@ lagrange's OS 9 canvas host lands (Phase M):
 - **Screen depth participates too** — verify suspected pixel bugs at
   Millions before hunting code; 16-bit direct conversion hue-shifts
   (RGB555) legitimately.
+- **AA text has no per-pixel alpha in QuickDraw** — `CopyBits`/`CopyMask`
+  can't src-over blend. The Toolbox canvas host composites glyphs with a
+  software src-over pass over the GWorld buffer (`out=(src*sA+dst*(255-sA))/255`),
+  the exact loop the host shim runs in `sdlcompat.c:1004-1010`. So the stb
+  grayscale alpha-ramp glyph cache composites identically on Classic; no
+  hinting/grid-fitting is needed because AA is correct at small ppem where
+  1-bit breaks (the reason 1-bit + pixel-aligned fonts was parked).
 - **`FSpOpenDF(fsWrPerm)` does NOT truncate** — `SetEOF(ref, 0)` after
   open, or follow-up log retrieves read a previous boot's stale tail
   (cost one imagined "phantom fetch" forensics round). `FlushVol(0, 0)`

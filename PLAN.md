@@ -65,7 +65,54 @@ Three consumers: sdl (stock platforms, unchanged), aqua (T-tier), classic
 (M-tier). Deliverable: headless build with a null backend + host unit
 harness, stock SDL build still green.
 
-### Phase 1 — Build systems
+**Phase ordering (2026-09-09).** The remaining work is now ordered:
+**1) ClassicNet network seam on the host** (below) → **2) Tiger/Cocoa** →
+**3) Classic**. Cross-build tool systems are the enabling work that runs in
+*parallel* (only the host mbedTLS + ClassicNet host slice are needed for
+step 1, not the cross compilers). This was re-sequenced so networking is
+host-verified end-to-end before any real UI tier is built.
+
+### Phase 1 — ClassicNet network seam (do next; host-first)
+
+Reuse the proven "canvas seam" pattern for networking: build the Gemini
+transport against ClassicNet on the **host first**, then the same slice
+moves to the real tiers. Host-verifiable end to end; `build-host` stays
+green.
+
+**Why this shape.** lagrange drives every fetch through the_Foundation's
+`iTlsRequest`/`iSocket` (`gmrequest.c` creates one, sets host/content,
+submits, and reads `serverCertificate`/`isVerified`). ClassicNet is a
+lower-level C callback API: a `CNTransport` vtable
+(`poll`/`send`/`recv`/`close`) with `cn_darwin8.c` (BSD sockets — also the
+host transport), `cn_ot.c` (Open Transport, Classic-only), and `cn_tls.c`
+(mbedTLS layered above a transport). So the seam keeps `gmrequest.c`,
+`gmcerts`, and everything above **untouched** and reimplements just the two
+the_Foundation classes over `CNTransport` — "escaping SDL" again, now
+"escaping the_Foundation's OpenSSL":
+
+- `socket.c` backend — a `Stream` subclass whose I/O drives a
+  `CNTransport` (`cn_darwin8` on host/Tiger, `cn_ot` on Classic), pushing
+  bytes into the Stream buffer and firing the `connected`/`readyRead`/
+  `error`/`disconnected` audiences.
+- `tlsrequest.c` backend — wraps `cn_tls` (mbedTLS, TLS 1.2 pinned via
+  `CN_TLS_FORCE_TLS12=1`) over that transport; maps `submit`/`readAll`/
+  `serverCertificate`/`isVerified`/`setVerifyFunc` to mbedTLS + `gmcerts`.
+- A compile-time switch (`LAGRANGE_CLASSICNET`) selects the ClassicNet
+  backend for the canvas build; stock `app` keeps OpenSSL.
+
+Milestones (host-verifiable):
+- **N1 — host wiring.** Vendor ClassicNet (host slice) + host mbedTLS
+  (Starscape's `mbedtls-host3` tree) into the lagrange build; a host
+  smoke test does a real Gemini/HTTPS fetch over `cn_darwin8` + `cn_tls`.
+  *Evidence already on disk:* ClassicNet's own host build passes 13/13
+  tests on this Mac (incl. `test_darwin8` — the transport — and
+  `test_h2_download` — real I/O); host mbedTLS libs are present.
+- **N2 — the seam.** Implement the `Socket`/`TlsRequest` backends over
+  `CNTransport` (the bulk of the code; iteration-heavy).
+- **N3 — into the canvas app.** Wire the seam into `canvaswin` so the
+  viewer actually fetches a Gemini page over ClassicNet.
+
+### Phase 2 — Build systems (enabling toolchain, parallel)
 
 - **Retro68** (`RETRO68_TOOLCHAIN`, machine artifact; C11 verified on both
   `powerpc-apple-macos-gcc` and `m68k-apple-macos-gcc` targets). Static
@@ -81,11 +128,13 @@ harness, stock SDL build still green.
 - `the_Foundation` darwin8 + Retro68 builds: expect to shim/replace
   POSIX-ish bits (threads → TM shim on M-tier; native pthread on
   darwin8), atomics, time, paths, sockets.
-- Typography groundwork (host-testable, do while toolchains spin): the
+- ~~Typography groundwork~~ **PARKED (nice-to-have, 2026-09-09)** — the
   per-spec `smooth` attribute + glyph-cache-key change in
-  `src/render/text_stb.c`/`src/fontpack.c`, and assemble the
-  pixel-aligned bitmap-source TTF fontpack for M-tier UI — see the
-  Typography section under Phase 2.
+  `src/render/text_stb.c`/`src/fontpack.c` and the pixel-aligned
+  bitmap-source TTF fontpack only feed a 1-bit "Platinum-sharp" look.
+  With AA-on-Classic as the primary path, this is not a Phase-1
+  prerequisite; revisit only if the 1-bit idea returns. See the
+  Typography section.
 
 ### Phase 2 — ClassicNet networking (MD- and T-tier shared backend)
 
@@ -141,6 +190,12 @@ self-contained C. Everything runs fine against a software framebuffer
 (the `ENABLE_CANVAS`/`sdlcompat.c` seam proves it on the host). No
 FreeType/SDL_ttf anywhere.
 
+**DEFERRED (nice-to-have, parked 2026-09-09):** the fine-grained per-spec
+`smooth` machinery below existed to feed a 1-bit "Platinum-sharp" UI. With
+AA-on-Classic as the primary path (the default alpha-ramp rendering needs
+none of it), this is **not a Phase-1 prerequisite** — it's the mechanism to
+revisit only if the 1-bit look is wanted later. Kept below for reference.
+
 Key structural fact: smoothing is decided at *rasterization time per
 glyph* via the palette chosen in `glyphPalette_()` (`text_stb.c:542`) —
 `grayscale` (alpha ramp) vs `blackAndWhite` (1-bit, alpha≤100 threshold).
@@ -160,31 +215,31 @@ draw time. So per-context smoothing is a small change:
 
 Tier policy:
 
-- **Classic (M-tier)**: UI chrome and menus render **1-bit** (smoothing
-  off) using **pixel-aligned outline TTFs** — faces generated from
-  bitmap sources (BDF/FON-derived, e.g. px437/unscii-class conversions)
-  whose outlines trace exact pixel edges. This is the only reliable way
-  to get a period-correct Platinum-sharp look: stb does no hinting or
-  grid-fitting, so ordinary outline fonts at 9–13 ppem in 1-bit produce
-  broken stems and filled bowls; pixel-aligned outlines bypass the
-  hinting gap entirely (unhinted rasterization of grid-locked outlines
-  is exact). Ship as a small built-in fontpack — fontpack specs are
-  data, no code. Document view gets stb grayscale AA (its gamma is
-  linear, `text_stb.c:467` TODO; tune palette values if needed after
-  visual runs). Body text in pure 1-bit stays an optional taste
-  fallback via per-spec `smooth` = off.
+- **Classic (M-tier)**: grayscale AA everywhere — the same stb alpha-ramp
+  path the host/app already uses (the default `prefs.fontSmoothing`).
+  Unhinted stb AA needs no grid-fitting, so small sizes render correctly
+  (soft, not broken): the 1-bit "broken stems / filled bowls" problem
+  doesn't apply to AA. Compositing: `CopyBits` has no per-pixel alpha, so
+  the Toolbox canvas host draws glyphs with a software src-over pass over
+  the GWorld buffer — the exact loop the shim already implements
+  (`sdlcompat.c:1004-1010`; see arcana "AA compositing on Classic").
+  Gamma/tonality: `text_stb.c:467` TODO — tune palette values after
+  visual runs.
 - **Aqua (T-tier)**: full grayscale AA everywhere (the normal lagrange
-  look); same per-spec machinery means nothing special is needed — pick
-  smoothing per spec for consistency, don't force 1-bit through
-  AppKit's `NSBitmapImageRep` path.
-- Oversampling/majority-threshold rasterization is the fallback for
-  any UI font that must be an ordinary outline TTF (helps, doesn't fix
-  grid alignment — avoid needing it).
+  look); `NSBitmapImageRep` handles alpha natively, so no extra
+  compositing pass beyond what the canvas host already does.
+- **Deferred 1-bit** (parked): a period-correct "Platinum-sharp" look would
+  need pixel-aligned outline TTFs from bitmap sources (BDF/FON→TTF,
+  e.g. px437/unscii) — per-spec `smooth=off` in a small built-in fontpack.
+  Aesthetic only, not a correctness need; revisit on real hardware if the
+  AA look is judged wrong. Oversampling/majority-threshold rasterization
+  is the fallback for any ordinary outline UI font used in that mode.
 
 Risks tracked: HarfBuzz 2.8.2 on Retro68 is the heavy C++ build on the
-M-tier (FriBidi is small pure C — trivial); glyph-atlas memory on the
-low-RAM profile measured in Phase 2's QEMU budget check; tone/quality
-of 1-bit document text accepted/adjusted after first real-hardware run.
+M-tier (FriBidi is small pure C — trivial); glyph-atlas memory + the CPU
+of the per-pixel AA composite on the low-RAM G3 profile, measured in
+Phase 2's QEMU budget check. Parked: the 1-bit Platinum look (aesthetic
+only — correctness is covered by AA).
 
 ### Phase 3 — Aqua (10.4/10.5 PPC) UI
 
