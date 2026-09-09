@@ -3,133 +3,95 @@
 ## Where we are
 
 Phase 0 (host canvas seam) is functionally complete on both targets and
-*X-ready* on real SDL2. The seam is build-level: the widget kit compiles
-against stub SDL headers in `src/ui/canvas/include/`; at compile time one
-of three backends provides the bodies: (1) real SDL2 via `include_next`
-passthrough (LAGRANGE_CANVAS_SDL_BACKEND, the stock `app` target), (2) the
-software-framebuffer shim `sdlcompat.{h,c}` (canvasapp, canvaswin), (3)
-future Aqua/Toolbox backends. Touch is stubbed out for canvas builds
-(`touch_stub.c`). Dev version strings: canvas targets report
-`1.21.1-dev+phase0-shim (66e3824a)`; policy in AGENTS.md.
+*X-ready* on real SDL2, and `canvaswin` now shows a **real native macOS menu
+bar** (the Ph0.5 menu-contract milestone). The seam is build-level: the
+widget kit compiles against stub SDL headers in `src/ui/canvas/include/`; at
+compile time one of three backends provides the bodies: (1) real SDL2 via
+`include_next` passthrough (LAGRANGE_CANVAS_SDL_BACKEND, the stock `app`
+target), (2) the software-framebuffer shim `sdlcompat.{h,c}` (canvasapp,
+canvaswin), (3) future Aqua/Toolbox backends. Touch is stubbed for canvas
+builds (`touch_stub.c`). Menus are a second escape-from-SDL seam: the
+portable contract lives in `src/ui/canvasmenu.h` and each target supplies a
+`_MacOS`-family implementation (AppKit `canvasmenu_impl_SDL.m` for the SDL2
+host, `macos.m` for the legacy direct-SDL `app`, `canvasmenu.c` null no-ops
+for headless). Both stock `app` and both canvas targets build clean with
+`LAGRANGE_NATIVE_MENU` as the single compile-time menu marker (menus no
+longer keyed off `iPlatformAppleDesktop`).
 
 **Runtime environment (this machine, user-level)**: homebrew `sdl2` alias
-= sdl2-compat (broken Retina coordinate behavior — hover/press basis
-flip). Stock and canvas builds therefore use **real SDL2 2.26.5 patched
-with `sdl2.26-macos-ios.diff`**, built to `/tmp/kilo/sdl2` (VOLATILE —
-rebuild or move under `~/classic/` when needed; rebuild recipe = untar
-SDL2-2.26.5, `patch -p1`, cmake install prefix). Kill every Lagrange/
-canvasapp before launching a build (IPC steal rule, AGENTS.md).
-Canvas builds use an **isolated state dir** (`/tmp/kilo/canvas-home`,
-override with `CANVAS_PREF_DIR`) — never the user's real
-`~/.config/lagrange`.
+= sdl2-compat (broken Retina coordinate behavior). Stock and canvas builds
+therefore use **real SDL2 2.26.5 patched with `sdl2.26-macos-ios.diff`**,
+built to `/tmp/kilo/sdl2` (VOLATILE — rebuild or move under `~/classic/`
+when needed). Kill every Lagrange/canvasapp before launching a build (IPC
+steal rule, AGENTS.md). Canvas builds use an **isolated state dir**
+(`/tmp/kilo/canvas-home`, override with `CANVAS_PREF_DIR`).
 
 ## Last completed milestone
 
-**Render + input parity of the shim with real SDL2** (this session,
-2026-09-09). All fixes in `src/ui/canvas/sdlcompat.{c,h}` unless noted:
+**Native macOS menu bar on `canvaswin`** (this session, 2026-09-09). New
+`src/ui/canvasmenu.h` (portable contract), `canvasmenu.c` (null backend),
+`canvasmenu_impl_SDL.m` (clean AppKit backend — builds the NSApp main menu
+from `iMenuItem` arrays, dispatches via a lightweight `MenuCommands` target
+that posts commands, enable/disable by command/index/key, window menu +
+localization; **no** delegate swap, **no** event monitors, **no** SDL window
+internals). `macos.h` now pulls menu declarations from `canvasmenu.h`; a
+`hasNativeMenu_Platform()` was added to `macos.m` and the null/AppKit
+backends. Menu gate sites were collapsed from
+`iPlatformAppleDesktop`(±`LAGRANGE_NATIVE_MENU`) / `LAGRANGE_MAC_MENUBAR` to
+a single `LAGRANGE_NATIVE_MENU` marker (app.c, window.c, util.c,
+inputwidget.c, documentwidget.c, bindingswidget.c, root.c); defs.h suppresses
+the in-window `LAGRANGE_MENUBAR` when the native menu is present. CMake:
+`canvasapp` links `canvasmenu.c`; `canvaswin` links `canvasmenu_impl_SDL.m`,
+gets `LAGRANGE_NATIVE_MENU`(+`LAGRANGE_MAC_MENUBAR`) defines and AppKit on
+Apple. Stock `app` keeps `macos.m`.
 
-1. `SDL_RenderCopy` blend semantics: blend `NONE` = straight copy (color
-   mod applied, no alpha blending, dst alpha replaced, alpha mod inert);
-   `BLEND` = alpha-over with linear dst-alpha (`sA + dA*(255-sA)/255`,
-   was quadratic). Fixed chrome-wide text garbling.
-2. `SDL_SetRenderTarget` resets the clip rect (real SDL does; a stale
-   clip silently ate glyph-cache writes at 2x — "only lowercase i"
-   symptom).
-3. `SDL_RenderClear` honors draw-color alpha (TextBufs clear to
-   `(255,255,255,0)`; the old force-opaque hack painted white boxes
-   behind input-field text).
-4. `SDL_TOUCH_MOUSEID` = `(Uint32)-1` (was 0 — matched every real mouse,
-   so `mouseCoord_Window` returned `latestPosition_Touch()` = (0,0);
-   sidebar list clicks were dead).
-5. `SDL_PushEvent` fills `windowID` (0) with the last created window id —
-   the app's hover tracking requires event/windowID match.
-6. `SDL_ShowWindow` synthesizes SHOWN + EXPOSED window events (a fresh
-   first-run window never got exposed → widget tree never drew → blank
-   canvas).
-7. `SDL_Delay` sleeps instead of busy-waiting (100% CPU spin).
-8. `SDL_GetPrefPath` returns the isolated state dir (see above); app.c
-   CANVAS `defaultDataDir_App_` = NULL so it is actually used.
-9. sdlview (viewer): forwards real window events (expose/size/enter/
-   leave → resize reflows work); real SDL2 is **dlopen-only** now — the
-   direct link in CMake bound the app's `SDL_*` calls to the real
-   library under two-level namespace, silently bypassing the shim.
-   Bundle binary must be re-copied after every rebuild
-   (`cp build-canvas/canvaswin build-canvas/CanvasWin.app/Contents/MacOS/`).
-   Launch via `open` is currently flaky (silent death); direct shell
-   launch works and `CANVAS_ERRLOG=<file>` redirects stderr for
-   LaunchServices launches.
-10. Canvas-main harness: `CANVAS_CLICK="x,y;x2,y2"` synthetic click
-    sequence injector (points, 2s apart, `CANVAS_CLICK_AT_MS` start),
-    `CANVAS_DEBUG_TEXTCACHE` in-window glyph-cache dump, texture dump
-    hooks. Headless `CANVAS_CLICK` click-through-link verified
-    end-to-end: link click → `document.request.started
-    url:gemini://geminiprotocol.net/docs/faq.gmi`; sidebar bookmark
-    click → `tabs.switch`.
+Also fixed the observed host-scaling issue: `canvaswin` used to stretch the
+shim canvas to the view window non-uniformly (vertical stretch). `sdlview.c`
+now letterboxes and uses a whole-number scale so the 2x canvas maps to whole
+window pixels (crisp text even though `SDL_SetWindowSize` is a no-op in the
+shim, i.e. the canvas is locked to the app window's 900×560@2x logical size).
 
-Verification: `src/ui/canvas/tests/shimtext.c` (see its README) — the
-glyph-cache pipeline is **bit-exact vs real SDL2** at 1x and 2x. User-
-verified in the windowed viewer: all text renders (menus, tabs, URL
-field, sidebar, banner headline), document link clicks navigate, hover
-works with the pointing-hand cursor, sidebar clicks act.
+Evidence / reproduce:
+- Menu bar via System Events (not eyeball): `osascript -e
+  'tell application "System Events" to tell (first process whose name
+  contains "canvaswin") to get name of every menu bar item of menu bar 1'`
+  → `Apple, canvaswin, File, Edit, View, Bookmarks, Identity, Window, Help`.
+- `File` submenu populated (New Window/New Tab/Open Location…/Close Tab/
+  Save to Downloads…/Preferences…/Quit Lagrange); `Identity` →
+  `New Identity…` opened the create-identity dialog end-to-end (command
+  dispatch via `postCommand_Root`).
+- Build: `cmake --build build-canvas --target canvaswin canvasapp -j8`
+  (after `cmake -S . -B build-canvas`). Launch:
+  `CANVAS_PREF_DIR=/tmp/kilo/canvas-home CANVAS_ERRLOG=/tmp/kilo/cw.err
+  ./build-canvas/canvaswin --canvas-window --canvas-frames -1`.
+- Default window (900×560) is exactly 1:1 with the canvas (`viewOut=1800x1120`
+  = `canvas=1800x1120`); a resized/`--canvas-view` window letterboxes crisply.
+- Regression gate: `cmake --build build-host --target app -j8` stays green
+  (stock `macos.m` app).
 
 ## In-flight
 
-1. **Trackpad scroll too fast** — **root-caused and fixed in tree**
-   (`src/ui/canvas/sdlview.c`, `src/ui/canvas/sdlcompat.c`), awaiting
-   tactile confirm. Root cause was NOT a 2x pixel mismatch: the windowed
-   viewer forces `CANVAS_SCALE=2` (pixelRatio 2) but the py-pixel flag
-   lagrange sets in `ev.wheel.direction` (`iBit(9)` = `1u<<8`) was never
-   set by sdlview, so every widget hit the *notched* wheel path and
-   multiplied each small trackpad delta by `3 * lineHeight` /
-   `3 * itemHeight` — massive overspeed. sdlview now, when the patched
-   SDL2 reports `which==0` (precise scroll), sets
-   `WHEEL_FLAG_PERPIXEL`, forwards `which`/`preciseX`/`preciseY`, and
-   scales `preciseY * g_canvasScale` into canvas-pixel units — matching
-   `src/platform/macos.m`. Headless `canvasapp` smoke + both canvas
-   targets build clean; the real check is a trackpad scroll in
-   `canvaswin` (kills/flushes the old binary first per AGENTS.md).
-2. **Mac native menu (philosophy set, code NOT yet written)** — make
-   `canvaswin` show a real macOS menu bar, establishing the portable
-   menu-contract pattern for Aqua/Toolbox. **Decided** (do not re-litigate):
-   DON'T rename the `_MacOS` menu ops (all Apple-family targets implement
-   the same symbols); DON'T drag `macos.m` into the shim build (it swaps
-   NSApplication delegate, installs ScrollWheel/KeyDown event monitors
-   that regress the wheel path, and needs real SDL window internals the
-   stub headers lack); DO a clean menu-only AppKit rewrite; keep `macos.m`
-   for the legacy direct-SDL `app`. See `docs/arcana.md` → "Architecture —
-   escaping SDL" for the model and why.
-   **To implement:**
-   - `src/ui/canvasmenu.h` (portable contract: `insertMenuItems_*`,
-     `updateMenuItems_*`, `removeMenu_*`, `removeMenuItems_*`,
-     `enableMenu_*`, `enableMenuIndex_*`, `enableMenuItem_*`,
-     `enableMenuItemsByKey_*`, `enableMenuItemsOnHomeRow_*`,
-     `handleCommand_*`, `localizeApplicationMenu_*`, `showPopupMenu_*`,
-     `submenuRoot_*`, plus `hasNativeMenu_Platform()`). Declares the
-     `_MacOS`-named symbols above.
-   - `src/ui/canvasmenu.c` (default null backend; no-ops; portable C).
-   - `src/ui/canvasmenu_impl_SDL.m` (clean AppKit backend for the SDL2
-     host: build NSApp main menu from `iMenuItem` arrays, dispatch via a
-     lightweight target that posts commands, enable/disable by
-     command/index/key, window menu, localization; NO delegate swap, NO
-     event monitors, NO SDL window coupling).
-   - future `canvasmenu_impl_toolbox.c` (Menu Manager) — not now.
-   - Gate collapse: change menu-using gate sites from
-     `iPlatformAppleDesktop`(±`LAGRANGE_NATIVE_MENU`) and
-     `LAGRANGE_MAC_MENUBAR` to a single `LAGRANGE_NATIVE_MENU` marker,
-     so canvaswin uses native menus WITHOUT flipping iPlatformAppleDesktop
-     (which would change fonts/DPI/layout). Sites: app.c:213/779/1635/
-     1660/1792/2672/3477/4905, window.c:225/369/1668, util.c:1198/1240/
-     1257/1481/4114, inputwidget.c:80, documentwidget.c:576, bindingswidget.c:148.
-   - CMake: `canvaswin` gains `canvasmenu_impl_SDL.m` + `LAGRANGE_NATIVE_MENU`
-     (+`LAGRANGE_MAC_MENUBAR`) defines + AppKit link; stock `app` keeps
-     `macos.m`; `canvasapp` (headless) links `canvasmenu.c` and stays
-     `iPlatformPcDesktop`.
-   - Build order: stock `app` first (regression gate), then `canvaswin`.
-     Verify native menu bar via `osascript`/System Events listing the
-     running process's menu bar items (not eyeball). Linux `app` build
-     stays green (contract is portable; impl is macOS-only).
-   **Roadblock/risk:** the AppKit backend is ~300 fresh ObjC lines; gate
-   collapse touches the working stock build, so verify it after every stage.
-3. Cleanup: diagnostics traces in sdlcompat.c/canvasmain.c are env-
-   gated (`CANVAS_LOG_*`); fine to keep, but review before any commit.
-   Evidence/diagnostic captures live in `/tmp/kilo/` (VOLATILE).
+1. **Trackpad scroll confirm** (root-caused/fixed in tree, awaiting tactile
+   confirm) — sdlview sets `WHEEL_FLAG_PERPIXEL` + forwards `preciseX/Y`
+   scaled by `g_canvasScale` when the patched SDL2 reports `which==0`.
+2. **Host-scaling polish** — letterbox+integer scale works and text is crisp,
+   but the shim canvas cannot follow window resize (`SDL_SetWindowSize` is a
+   no-op in `sdlcompat.c`), so a resized view window letterboxes rather than
+   refilling. If a resize-follow behavior is wanted, wire
+   `SDL_SetWindowSize` → canvas resize in `sdlcompat.c`.
+3. **Multi-window** — **decided**: NOT needed for the Phase 0 host (declined;
+   `app.c` forces `detachedPrefs=iFalse` on `LAGRANGE_CANVAS` so dialogs are
+   in-window sheets). REQUIRED for the future Aqua/Toolbox backends: one OS
+   window per shim `iWindow`, positioned from the app window rect, events
+   routed by shim window **id** (not index — the shim swap-removes indices on
+   close). Earlier viewer-mirror prototype regressed (redraw/event spin +
+   index instability), so it was reverted; the requirement is recorded in
+   `docs/arcana.md`.
+4. Cosmetic: canvaswin menu puts `Preferences…`/`Quit` in the `File` menu
+   (`LAGRANGE_PC_MENUS` gated on `iPlatformPcDesktop`); on the stock mac app
+   they live in the System menu. Suppressing `LAGRANGE_PC_MENUS` for
+   `LAGRANGE_NATIVE_MENU` is possible but deferred — the SDL default app-menu
+   slots would need verification first.
+5. Cleanup: diagnostics traces in sdlcompat.c/canvasmain.c are env-gated
+   (`CANVAS_LOG_*`); fine to keep, review before any commit. Evidence lives
+   in `/tmp/kilo/` (VOLATILE).

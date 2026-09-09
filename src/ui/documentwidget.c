@@ -62,6 +62,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 #if defined (iPlatformAppleDesktop)
 #   include "platform/macos.h"
 #endif
+#if defined (LAGRANGE_NATIVE_MENU)
+#   include "canvasmenu.h"
+#endif
 #if defined (iPlatformAppleMobile)
 #   include "platform/ios.h"
 #endif
@@ -573,7 +576,7 @@ static void setLinkNumberMode_DocumentWidget_(iDocumentWidget *d, iBool set) {
         iChangeFlags(d->flags, showLinkNumbers_DocumentWidgetFlag, set);
         /* Children have priority when handling events. */
         enableActions_DocumentWidget_(d, !set);
-#if defined (iPlatformAppleDesktop)
+#if defined (LAGRANGE_NATIVE_MENU)
         enableMenuItemsOnHomeRow_MacOS(!set);
 #endif
         window_Widget(d)->keyPriority = set ? as_Widget(d) : NULL;

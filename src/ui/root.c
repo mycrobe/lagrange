@@ -2142,7 +2142,7 @@ void createUserInterface_Root(iRoot *d) {
                                "navbar.action4", collapse_WidgetFlag);
         setId_Widget(makeMenu_Widget(root, userDataMenuItems_, iElemCount(userDataMenuItems_)),
                      "userdatamenu");
-#if !defined (LAGRANGE_MAC_MENUBAR)
+#if !defined (LAGRANGE_NATIVE_MENU)
         /* Hamburger menu. */ {
             iLabelWidget *navMenu = makeMenuButton_LabelWidget(
                 menu_Icon,

@@ -55,6 +55,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 #if defined (iPlatformAppleDesktop)
 #   include "platform/macos.h"
 #endif
+#if defined (LAGRANGE_NATIVE_MENU)
+#   include "canvasmenu.h"
+#endif
 #if defined (iPlatformAndroidMobile)
 #   include "platform/android.h"
 #endif
@@ -77,7 +80,7 @@ static const char * sensitive_     = "\u25cf";
 #define minWidth_InputWidget_   (3 * gap_UI)
 
 static void enableEditorKeysInMenus_(iBool enable) {
-#if defined (iPlatformAppleDesktop)
+#if defined (LAGRANGE_NATIVE_MENU)
     enableMenuItemsByKey_MacOS(SDLK_LEFT,  KMOD_PRIMARY, enable);
     enableMenuItemsByKey_MacOS(SDLK_RIGHT, KMOD_PRIMARY, enable);
     enableMenuItemsByKey_MacOS(SDLK_UP,    KMOD_PRIMARY, enable);

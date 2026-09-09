@@ -30,6 +30,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 #if defined (iPlatformAppleDesktop)
 #   include "platform/macos.h"
 #endif
+#if defined (LAGRANGE_NATIVE_MENU)
+#   include "canvasmenu.h"
+#endif
 
 iDeclareType(BindingItem)
 typedef iListItemClass iBindingItemClass;
@@ -145,7 +148,7 @@ static void setActiveItem_BindingsWidget_(iBindingsWidget *d, size_t pos) {
         invalidateItem_ListWidget(d->list, d->activePos);
     }
     setScrollMode_ListWidget(d->list, d->activePos != iInvalidPos);
-#if defined (iPlatformAppleDesktop) && defined (LAGRANGE_MAC_CONTEXTMENU)
+#if defined (LAGRANGE_NATIVE_MENU)
     /* Native menus must be disabled while grabbing keys so the shortcuts don't trigger. */
     const iBool enableNativeMenus = (d->activePos == iInvalidPos);
     enableMenu_MacOS("${menu.title.file}", enableNativeMenus);

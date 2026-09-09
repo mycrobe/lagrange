@@ -45,6 +45,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 #if defined (iPlatformAppleDesktop)
 #   include "platform/macos.h"
 #endif
+#if defined (LAGRANGE_NATIVE_MENU)
+#   include "canvasmenu.h"
+#endif
 #if defined (iPlatformAppleMobile)
 #   include "platform/ios.h"
 #endif
@@ -222,7 +225,7 @@ size_t numWindowMenuItems_Window(void) {
     return iElemCount(windowMenuItems_) - 1; /* don't count the terminator */
 }
 
-#if defined (LAGRANGE_MAC_MENUBAR)
+#if defined (LAGRANGE_NATIVE_MENU)
 
 static iBool macMenusInserted_;
 
@@ -259,7 +262,7 @@ static void removeMacMenus_(void) {
     macMenusInserted_ = iFalse;
 }
 
-#endif /* LAGRANGE_MAC_MENUBAR */
+#endif /* LAGRANGE_NATIVE_MENU */
 
 int numRoots_Window(const iWindow *d) {
     int num = 0;
@@ -366,7 +369,7 @@ static void setupUserInterface_MainWindow(iMainWindow *d) {
     setCurrent_Root(NULL);
     /* One of the roots always has keyboard input focus. */
     d->base.keyRoot = d->base.roots[0];
-#if defined (LAGRANGE_MAC_MENUBAR)
+#if defined (LAGRANGE_NATIVE_MENU)
     insertMacMenus_(); /* TODO: Shouldn't this be in the App? */
 #endif
 }
@@ -1665,7 +1668,7 @@ iBool processEvent_Window(iWindow *d, const SDL_Event *ev) {
                 }
             }
             if (isCommand_UserEvent(&event, "lang.changed") && (mw || extraw)) {
-#if defined (LAGRANGE_MAC_MENUBAR)
+#if defined (LAGRANGE_NATIVE_MENU)
                 /* Retranslate the menus. */
                 /* TODO: Instead of removing, just update the labels. */
                 removeMacMenus_();

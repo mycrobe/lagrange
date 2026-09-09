@@ -60,6 +60,17 @@ ours:      canvas_seam   stub SDL headers ↔ real backend (sdlview / Aqua / Too
 - Host verification is via `osascript`/System Events querying the running
   process's menu bar items, so the abstract circle is proven end-to-end
   without eyeballing.
+- **Multi-window is a backend requirement, not a Phase 0 host one.** The
+  canvas host displays a single shim framebuffer: `SDL_RenderPresent`
+  hardcodes `presentHook_(0)` and `sdlview.c` has one real window, so any
+  extra shim window (detached Preferences, `window.new`) is tracked but
+  never rendered — it grabs focus while invisible ("looks frozen"). For the
+  Phase 0 host we decline a second window and force detached dialogs to
+  in-window sheets (`detachedPrefs=0` on `LAGRANGE_CANVAS`). But the future
+  **Aqua/Toolbox backends each need a real per-`iWindow` implementation**:
+  one OS window per shim `iWindow`, position/size from the app window rect,
+  and event routing keyed by shim window **id** (not index — the shim's
+  swap-remove reorders indices on close).
 
 ## Toolchain / build (Retro68, M-tier)
 

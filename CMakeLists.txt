@@ -791,6 +791,7 @@ if (ENABLE_CANVAS)
         src/ui/canvas/sdlcompat.h
         src/ui/canvas/touch_stub.c
         src/ui/canvas/canvasmain.c
+        src/ui/canvasmenu.c
         src/updater.c
     )
     add_executable (canvasapp ${CANVAS_SOURCES} ${RESOURCES})
@@ -847,6 +848,15 @@ if (ENABLE_CANVAS)
         src/ui/canvas/canvasmain.c
         src/ui/canvas/sdlview.c
     )
+    # On Apple the windowed host backs its menus with the native macOS menu bar
+    # (canvasmenu_impl_SDL.m) instead of the portable null backend (canvasmenu.c).
+    # It registers the single LAGRANGE_NATIVE_MENU marker WITHOUT flipping
+    # iPlatformAppleDesktop (which would also change fonts/DPI/layout); the
+    # overlapping in-window LAGRANGE_MENUBAR is suppressed via defs.h.
+    if (APPLE)
+        list (REMOVE_ITEM CANVASWIN_SOURCES src/ui/canvasmenu.c)
+        list (APPEND CANVASWIN_SOURCES src/ui/canvasmenu_impl_SDL.m)
+    endif ()
     add_executable (canvaswin ${CANVASWIN_SOURCES} ${RESOURCES})
     add_dependencies (canvaswin resources)
     set_property (TARGET canvaswin PROPERTY C_STANDARD 11)
@@ -862,6 +872,18 @@ if (ENABLE_CANVAS)
     set (canvasWinDefs ${canvasDefs})
     list (REMOVE_ITEM canvasWinDefs LAGRANGE_CANVAS_VIEWER=0)
     list (APPEND canvasWinDefs LAGRANGE_CANVAS_VIEWER=1)
+    # The windowed canvas host backs its menus with the native macOS menu bar
+    # (canvasmenu_impl_SDL.m). It registers the single LAGRANGE_NATIVE_MENU
+    # marker WITHOUT flipping iPlatformAppleDesktop (which would also change
+    # fonts/DPI/layout). The overlapping in-window LAGRANGE_MENUBAR is
+    # suppressed via defs.h because LAGRANGE_NATIVE_MENU is now defined.
+    if (APPLE)
+        list (APPEND canvasWinDefs
+            LAGRANGE_NATIVE_MENU=1
+            LAGRANGE_MAC_MENUBAR=1
+            LAGRANGE_MAC_CONTEXTMENU=1
+        )
+    endif ()
     target_compile_definitions (canvaswin PUBLIC ${canvasWinDefs})
     target_compile_options (canvaswin PUBLIC
         ${canvasOpts}
@@ -873,6 +895,10 @@ if (ENABLE_CANVAS)
     # two-level namespace, silently bypassing the sdlcompat shim.
     target_link_libraries (canvaswin PUBLIC the_Foundation::the_Foundation
         "-Wl,-rpath,${SDL2_VIEW_LIBDIR}")
+    if (APPLE)
+        # Native app menu bar (canvasmenu_impl_SDL.m) links AppKit/Foundation only.
+        target_link_libraries (canvaswin PRIVATE "-framework Foundation" "-framework AppKit")
+    endif ()
 endif ()
 
 # Deployment.

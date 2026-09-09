@@ -103,6 +103,8 @@ typedef union {
     unsigned char bytes[64];
 } SDL2_Event;
 
+typedef struct { int x, y, w, h; } SDL2_Rect; /* matches SDL_Rect ABI for RenderCopy */
+
 /* --- shim-side ABI, hand-declared (see sdlcompat.h) ----------------------- */
 
 typedef unsigned char shim_Uint8;
@@ -229,10 +231,33 @@ static void presentHook_(int winIndex) {
     }
     presentCount_++;
     syncCanvasTexture_();
-    p_SetRenderDrawColor(view_ren, 200, 60, 40, 255); /* red: easy to spot a failed copy */
+    p_SetRenderDrawColor(view_ren, 20, 20, 20, 255); /* dark clears the letterbox bars */
     p_RenderClear(view_ren);
+    /* Letterbox instead of stretch: when the shim canvas aspect (the app window
+       content) differs from the view window, preserve the former so content is
+       never distorted (e.g. the in-window menubar is gone -> different aspect).
+       Use a whole-number scale when it fits so the 2x Retina canvas maps to
+       whole window pixels (every canvas pixel -> 1 window pixel), keeping text
+       crisp even though SDL_SetWindowSize is a no-op in the shim (the canvas is
+       fixed at the app window's logical size). A fractional scale (window smaller
+       than the canvas) is only used if it cannot show at native resolution. */
     int rc = -1;
-    if (view_tex) rc = p_RenderCopy(view_ren, view_tex, NULL, NULL);
+    if (view_tex) {
+        SDL2_Rect dst = { 0, 0, 0, 0 };
+        int ow = 0, oh = 0;
+        if (p_GetRendererOutputSize) p_GetRendererOutputSize(view_ren, &ow, &oh);
+        if (ow > 0 && oh > 0 && view_texW > 0 && view_texH > 0) {
+            const float sx = (float) ow / (float) view_texW;
+            const float sy = (float) oh / (float) view_texH;
+            const float sFit = (sx < sy) ? sx : sy;
+            const float s = (sFit >= 1.0f) ? (float) ((int) sFit) : sFit;
+            dst.w = (int) (view_texW * s);
+            dst.h = (int) (view_texH * s);
+            dst.x = (ow - dst.w) / 2;
+            dst.y = (oh - dst.h) / 2;
+        }
+        rc = p_RenderCopy(view_ren, view_tex, NULL, &dst);
+    }
     int rp = p_RenderPresent(view_ren);
     if (presentCount_ < 3) {
         int ow = 0, oh = 0;

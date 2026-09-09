@@ -81,6 +81,10 @@ iBool shouldDefaultToMetalRenderer_MacOS(void) {
     return dispMode.refresh_rate > 60 && (ver.x > 10 || ver.y > 13);
 }
 
+iBool hasNativeMenu_Platform(void) {
+    return iTrue;
+}
+
 static void ignoreImmediateKeyDownEvents_(void) {
     /* SDL ignores menu key equivalents so the keydown events will be posted regardless.
        However, we shouldn't double-activate menu items when a shortcut key is used in our

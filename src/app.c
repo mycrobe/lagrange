@@ -80,6 +80,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 #if defined (iPlatformAppleDesktop)
 #   include "platform/macos.h"
 #endif
+#if defined (LAGRANGE_NATIVE_MENU)
+#   include "ui/canvasmenu.h" /* menu ops are provided by the target's menu backend */
+#endif
 #if defined (iPlatformAppleMobile)
 #   include "platform/ios.h"
 #   include <CoreFoundation/CoreFoundation.h>
@@ -210,7 +213,7 @@ struct Impl_App {
 #if defined (iPlatformAndroidMobile)
     uint32_t     lastBackButtonTime; /* detect and discard rapid Back button presses */
 #endif
-#if defined (iPlatformAppleDesktop) && defined (LAGRANGE_NATIVE_MENU)
+#if defined (LAGRANGE_NATIVE_MENU)
     iRoot *      submenuRoot; /* offscreen, since the application menu is not tied to a window */
 #endif
     /* Preferences: */
@@ -776,7 +779,7 @@ static void loadPrefs_App_(iApp *d) {
 #if !defined (LAGRANGE_ENABLE_CUSTOM_FRAME)
     d->prefs.customFrame = iFalse;
 #endif
-#if defined (LAGRANGE_MAC_MENUBAR)
+#if defined (LAGRANGE_NATIVE_MENU)
     d->prefs.menuBar = iFalse;
 #endif
     if (deviceType_App() != desktop_AppDeviceType) {
@@ -1577,7 +1580,14 @@ static void init_App_(iApp *d, int argc, char **argv) {
     }
 #endif
     init_Prefs(&d->prefs);
+#if defined (LAGRANGE_CANVAS)
+    /* The canvas host displays a single framebuffer (the viewer mirrors shim
+       window 0); a detached/prefs window would grab focus while staying
+       invisible -> the app appears frozen. Keep dialogs as in-window sheets. */
+    d->prefs.detachedPrefs = iFalse;
+#else
     d->prefs.detachedPrefs = !contains_CommandLine(&d->args, "prefs-sheet");
+#endif
     init_SiteSpec(dataDir_App_());
     init_Snippets(dataDir_App_());
     init_Misfin(dataDir_App_());
@@ -1632,9 +1642,9 @@ static void init_App_(iApp *d, int argc, char **argv) {
 #endif
 #if defined (iPlatformAppleDesktop)
     setupApplication_MacOS();
-# if defined (LAGRANGE_NATIVE_MENU)
+#endif
+#if defined (LAGRANGE_NATIVE_MENU)
     d->submenuRoot = newOffscreen_Root();
-# endif
 #endif
 #if defined (iPlatformAppleMobile)
     setupApplication_iOS();
@@ -1656,7 +1666,7 @@ static void init_App_(iApp *d, int argc, char **argv) {
         set_Array(&d->initialWindowRects, 0, &winRect);
     }
     loadPrefs_App_(d);
-#if defined (iPlatformAppleDesktop)
+#if defined (LAGRANGE_NATIVE_MENU)
     localizeApplicationMenu_MacOS();
 #endif
     updateActive_Fonts();
@@ -1789,7 +1799,7 @@ static void deinit_App(iApp *d) {
         return; /* already deinitialized */
     }
     delete_Gamepad(d->gamepad);
-#if defined (iPlatformAppleDesktop) && defined (LAGRANGE_NATIVE_MENU)
+#if defined (LAGRANGE_NATIVE_MENU)
     delete_Root(d->submenuRoot);
 #endif
     iReverseForEach(PtrArray, i, &d->popupWindows) {
@@ -2668,7 +2678,7 @@ void processEvents_App(enum iAppEventMode eventMode) {
                 }
                 if (ev.type == SDL_USEREVENT && ev.user.code == command_UserEventCode) {
 #if !defined (iPlatformTerminal)
-#   if defined (iPlatformAppleDesktop)
+#   if defined (LAGRANGE_NATIVE_MENU)
                     handleCommand_MacOS(command_UserEvent(&ev));
 #   endif
 #   if defined (iPlatformAndroidMobile)
@@ -3474,7 +3484,7 @@ iGamepad *gamepad_App(void) {
 }
 
 iRoot *submenuRoot_MacOS(void) {
-#if defined (iPlatformAppleDesktop) && defined (LAGRANGE_NATIVE_MENU)
+#if defined (LAGRANGE_NATIVE_MENU)
     return app_.submenuRoot;
 #else
     return NULL;
@@ -4902,7 +4912,7 @@ static iBool handleNonWindowRelatedCommand_App_(iApp *d, const char *cmd) {
     }
     else if (equal_Command(cmd, "bookmarks.changed")) {
         save_Bookmarks(d->bookmarks, dataDir_App_());
-#if defined (iPlatformAppleDesktop) && defined (LAGRANGE_NATIVE_MENU)
+#if defined (LAGRANGE_NATIVE_MENU)
         /* Update the macOS Bookmarks menu items. These application menu submenus need to
            exist without any windows existing, so we use an offscreen Root to store them. */
         iRoot *oldRoot = current_Root();

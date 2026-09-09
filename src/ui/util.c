@@ -49,6 +49,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 #if defined (iPlatformAppleDesktop)
 #   include "platform/macos.h"
 #endif
+#if defined (LAGRANGE_NATIVE_MENU)
+#   include "canvasmenu.h"
+#endif
 #if defined (iPlatformAppleMobile)
 #   include "platform/ios.h"
 #endif
@@ -1477,7 +1480,7 @@ void openMenuAnchorFlags_Widget(iWidget *d, iRect windowAnchorRect, int menuOpen
     /* Menu closes when commands are emitted, so handle any pending ones beforehand. */
     processEvents_App(postedEventsOnly_AppEventMode);
     setCurrent_Window(currentWindow);
-#if defined (iPlatformAppleDesktop)
+#if defined (LAGRANGE_NATIVE_MENU)
     if (flags_Widget(d) & nativeMenu_WidgetFlag) {
         /* Open a native macOS menu. */
         const iArray *items = userData_Object(d);
@@ -4111,7 +4114,7 @@ iWidget *makePreferences_Widget(void) {
             values,
             "${prefs.uilayout}",
             (const char *[]) {
-#if defined (LAGRANGE_MAC_MENUBAR) || defined (iPlatformTerminal)
+#if defined (LAGRANGE_NATIVE_MENU) || defined (iPlatformTerminal)
                 "prefs.bottomnavbar", "prefs.bottomtabbar", NULL
 #else
                 "prefs.bottomnavbar", "prefs.bottomtabbar", "prefs.menubar", NULL

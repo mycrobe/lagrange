@@ -375,7 +375,7 @@ iLocalDef int acceptKeyMod_ReturnKeyBehavior(int behavior) {
 #   define LAGRANGE_NATIVE_MENU
 #   define LAGRANGE_MAC_MENUBAR
 #   define LAGRANGE_MAC_CONTEXTMENU
-#elif defined (iPlatformDesktop)
+#elif defined (iPlatformDesktop) && !defined (LAGRANGE_NATIVE_MENU)
 #   define LAGRANGE_MENUBAR
 #endif
 

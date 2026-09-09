@@ -23,6 +23,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 #pragma once
 
 #include "ui/util.h"
+#include "ui/canvasmenu.h"
 
 iDeclareType(MenuItem)
 iDeclareType(Window)
@@ -36,16 +37,6 @@ void    enableMomentumScroll_MacOS  (void);
 void    registerURLHandler_MacOS    (void);
 void    setupApplication_MacOS      (void);
 void    hideTitleBar_MacOS          (iWindow *window);
-void    insertMenuItems_MacOS       (const char *menuLabel, int atIndex, int firstItemIndex, const iMenuItem *items, size_t count);
-void    updateMenuItems_MacOS       (int atIndex, const iMenuItem *items, size_t count);
-void    removeMenu_MacOS            (int atIndex);
-void    removeMenuItems_MacOS       (int atIndex, int firstItem, int numItems);
-void    enableMenu_MacOS            (const char *menuLabel, iBool enable);
-void    enableMenuIndex_MacOS       (int index, iBool enable);
-void    enableMenuItem_MacOS        (const char *menuItemCommand, iBool enable);
-void    enableMenuItemsByKey_MacOS  (int key, int kmods, iBool enable);
-void    enableMenuItemsOnHomeRow_MacOS(iBool enable);
-void    handleCommand_MacOS         (const char *cmd);
-void    localizeApplicationMenu_MacOS(void);
 
-void    showPopupMenu_MacOS         (iWidget *source, iInt2 windowCoord, const iMenuItem *items, size_t n);
+/* Menu operations come from the portable canvasmenu.h contract (each Apple
+   target implements the same `_MacOS`-family symbols). */
