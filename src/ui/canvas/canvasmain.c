@@ -132,9 +132,12 @@ int main(int argc, char **argv) {
     SDL_EnableScreenSaver();
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
 #if LAGRANGE_CANVAS_VIEWER
-    if (windowed) {
-        /* must be set before the shim's SDL_Init reads it */
-        setenv("CANVAS_SCALE", "2", 1);
+    if (windowed && !getenv("CANVAS_SCALE")) {
+        /* must be set before the shim's SDL_Init reads it. Default to 1x so the
+           viewer exercises the real non-retina rasterization (matching the 1x
+           Cocoa/classic targets this disk is validating); set CANVAS_SCALE=2 to
+           get the 2x render instead. */
+        setenv("CANVAS_SCALE", "1", 1);
     }
 #endif
 
