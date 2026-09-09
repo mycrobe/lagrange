@@ -111,10 +111,18 @@ Per earlier analysis (paradigms more similar than the T-tier):
   `WindowPtr` port (scale + depth conversion at draw). 8-bit quantize is
   a display decision, never a worker decision (Starscape T-6 rule).
 - `WaitNextEvent`/`EventRecord` → widget input translation.
-- **Menu shim**: port `src/platform/macos.m`'s NSMenu bridge to the Menu
-  Manager (`InsertMenu`/`SetMenuItemText`/`SetMenuItemCmdKey`/`CheckItem`),
-  rebuilt at the same points, posting back into `postCommand_App`. Use
-  `MenuHook`/`TESetIdleHook` for `CN_Idle` keep-alives during menu tours.
+- **Menu shim**: DON'T port `macos.m`'s AppKit code into Classic. Instead
+  keep a portable menu *contract* (`canvasmenu.{c,h}` — the `_MacOS`-family
+  menu ops) that every target implements: macOS/AppKit (`macos.m`, plus a
+  clean menu-only `canvasmenu_impl_SDL.m` for the canvas host), Classic =
+  Menu Manager (`InsertMenu`/`SetMenuItemText`/`SetMenuItemCmdKey`/
+  `CheckItem`), rebuilt at the same points, posting back into
+  `postCommand_App`. Use `MenuHook`/`TESetIdleHook` for `CN_Idle`
+  keep-alives during menu tours. The menu gate is a single
+  `LAGRANGE_NATIVE_MENU` marker, decoupled from `iPlatformAppleDesktop`,
+  so the shim build can exercise native menus without flipping macOS
+  platform behavior. (Model + gotchas: `docs/arcana.md` →
+  "Architecture — escaping SDL".)
 - Fonts: keep the STB/lagrange fontpack stack — no FOND/FONT resources,
   no WorldScript/TEC layer (UTF-8 preserved). See "Typography" below for
   the rendering decisions that follow from this.

@@ -10,6 +10,57 @@ repo's `docs/retro68-arcana.md` / `docs/plan-cocoa.md` — they are facts
 about the platform/toolchain, not about starscape's code. They will be
 re-verified against this app when our first on-device build touches them.
 
+## Architecture — escaping SDL (the seams)
+
+skyjake's `src/platform/` is a per-OS abstraction (macos/win32/x11/ios/
+android) but the whole app still **assumes SDL2** underneath: SDL owns the
+window, renderer, and event loop, and the platform files are OS-specific
+trimmings on top. To land on Mac OS 8/9 (no SDL) and Tiger/Leopard without
+an SDL3-era app, we add **seams that escape SDL**, each a portable contract
+with one implementation per target:
+
+```
+skyjake:   platform_abstraction (mac/linux/win) → assumes SDL2
+ours:      canvas_seam   stub SDL headers ↔ real backend (sdlview / Aqua / Toolbox)
+           native_menu   canvasmenu contract ↔ per-target impl (macos=AppKit, classic=Menu Manager)
+           network_seam  ClassicNet CNTransport ↔ cn_ot (OS8/9) / cn_darwin8 (Tiger)
+```
+
+- **Canvas seam**: the widget kit compiles against stub SDL headers; the shim
+  (`sdlcompat.c`) supplies a software framebuffer + event queue; a backend
+  (`sdlview` on macOS, future Aqua/Toolbox) does real device I/O. This is the
+  "always use the canvas shim" model — SDL is just one backend for it.
+- **Native menu**: SDL2 has *no* native-menu API, so menus talk straight to
+  the OS UI (AppKit `NSMenu` on mac, Menu Manager `InsertMenu`/
+  `SetMenuItemText`/`SetMenuItemCmdKey`/`CheckItem` on Classic), not SDL.
+- **Network**: honest replacement via a vtable, not SDL.
+
+**Menu-specific decisions (why this shape):**
+
+- The menu contract stays *portable* (`canvasmenu.{c,h}` declares the ops:
+  `insertMenuItems_*`, `enableMenuItem_*`, `showPopupMenu_*`, `submenuRoot_*`,
+  …). Each target implements those exact symbols. So a Classic backend just
+  reimplements them over the Menu Manager — no renaming of the shared names
+  to `_Native` is needed; they're the same `_MacOS`-family interface all
+  Apple targets implement. (Only the *compile-time gate* gets unified onto a
+  single "native menu in use" marker, decoupled from `iPlatformAppleDesktop`,
+  so the shim build can use native menus without flipping every macOS
+  platform behavior.)
+- **Do not drag `macos.m` into the shim build as the host backend.** It is
+  coupled to things that fight the shim: it swaps `NSApplication`'s delegate,
+  installs `ScrollWheel`/`KeyDown` local event monitors (which would *eat*
+  the scroll events at the source, regressing the sdlview wheel path),
+  and touches real SDL window internals (`nsWindow_`,
+  `SDL_GetWindowWMInfo`, metal-renderer hint) that the canvas stub SDL
+  headers don't provide. So the canvas host gets a **clean menu-only AppKit
+  rewrite** (`canvasmenu_impl_SDL.m`) that liberally reuses macos.m's menu
+  logic but omits the delegate swap, event monitors, and SDL-window coupling.
+  `macos.m` stays for the legacy direct-SDL `app` build during the transition;
+  the two implementations are never linked into the same binary.
+- Host verification is via `osascript`/System Events querying the running
+  process's menu bar items, so the abstract circle is proven end-to-end
+  without eyeballing.
+
 ## Toolchain / build (Retro68, M-tier)
 
 - **Toolchain provenance matters.** Our local Retro68 build is configured

@@ -88,9 +88,48 @@ works with the pointing-hand cursor, sidebar clicks act.
    `src/platform/macos.m`. Headless `canvasapp` smoke + both canvas
    targets build clean; the real check is a trackpad scroll in
    `canvaswin` (kills/flushes the old binary first per AGENTS.md).
-2. **Mac menu bar is TODO**: SDL lagrange moves menus to the native
-   menu bar; shim builds show the in-window menu row instead (fine for
-   phase 0; note for future Aqua backend).
+2. **Mac native menu (philosophy set, code NOT yet written)** — make
+   `canvaswin` show a real macOS menu bar, establishing the portable
+   menu-contract pattern for Aqua/Toolbox. **Decided** (do not re-litigate):
+   DON'T rename the `_MacOS` menu ops (all Apple-family targets implement
+   the same symbols); DON'T drag `macos.m` into the shim build (it swaps
+   NSApplication delegate, installs ScrollWheel/KeyDown event monitors
+   that regress the wheel path, and needs real SDL window internals the
+   stub headers lack); DO a clean menu-only AppKit rewrite; keep `macos.m`
+   for the legacy direct-SDL `app`. See `docs/arcana.md` → "Architecture —
+   escaping SDL" for the model and why.
+   **To implement:**
+   - `src/ui/canvasmenu.h` (portable contract: `insertMenuItems_*`,
+     `updateMenuItems_*`, `removeMenu_*`, `removeMenuItems_*`,
+     `enableMenu_*`, `enableMenuIndex_*`, `enableMenuItem_*`,
+     `enableMenuItemsByKey_*`, `enableMenuItemsOnHomeRow_*`,
+     `handleCommand_*`, `localizeApplicationMenu_*`, `showPopupMenu_*`,
+     `submenuRoot_*`, plus `hasNativeMenu_Platform()`). Declares the
+     `_MacOS`-named symbols above.
+   - `src/ui/canvasmenu.c` (default null backend; no-ops; portable C).
+   - `src/ui/canvasmenu_impl_SDL.m` (clean AppKit backend for the SDL2
+     host: build NSApp main menu from `iMenuItem` arrays, dispatch via a
+     lightweight target that posts commands, enable/disable by
+     command/index/key, window menu, localization; NO delegate swap, NO
+     event monitors, NO SDL window coupling).
+   - future `canvasmenu_impl_toolbox.c` (Menu Manager) — not now.
+   - Gate collapse: change menu-using gate sites from
+     `iPlatformAppleDesktop`(±`LAGRANGE_NATIVE_MENU`) and
+     `LAGRANGE_MAC_MENUBAR` to a single `LAGRANGE_NATIVE_MENU` marker,
+     so canvaswin uses native menus WITHOUT flipping iPlatformAppleDesktop
+     (which would change fonts/DPI/layout). Sites: app.c:213/779/1635/
+     1660/1792/2672/3477/4905, window.c:225/369/1668, util.c:1198/1240/
+     1257/1481/4114, inputwidget.c:80, documentwidget.c:576, bindingswidget.c:148.
+   - CMake: `canvaswin` gains `canvasmenu_impl_SDL.m` + `LAGRANGE_NATIVE_MENU`
+     (+`LAGRANGE_MAC_MENUBAR`) defines + AppKit link; stock `app` keeps
+     `macos.m`; `canvasapp` (headless) links `canvasmenu.c` and stays
+     `iPlatformPcDesktop`.
+   - Build order: stock `app` first (regression gate), then `canvaswin`.
+     Verify native menu bar via `osascript`/System Events listing the
+     running process's menu bar items (not eyeball). Linux `app` build
+     stays green (contract is portable; impl is macOS-only).
+   **Roadblock/risk:** the AppKit backend is ~300 fresh ObjC lines; gate
+   collapse touches the working stock build, so verify it after every stage.
 3. Cleanup: diagnostics traces in sdlcompat.c/canvasmain.c are env-
    gated (`CANVAS_LOG_*`); fine to keep, but review before any commit.
    Evidence/diagnostic captures live in `/tmp/kilo/` (VOLATILE).
