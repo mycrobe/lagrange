@@ -10,3 +10,6 @@
 [submodule "lib/sealcurses"]
 	path = lib/sealcurses
 	url = https://git.skyjake.fi/skyjake/sealcurses
+[submodule "vendor/ClassicNet"]
+	path = vendor/ClassicNet
+	url = https://github.com/mycrobe/ClassicNet

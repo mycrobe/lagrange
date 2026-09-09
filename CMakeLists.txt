@@ -73,6 +73,7 @@ set    (RESOURCES_LGR_PATH      "" CACHE STRING "Additional location to check wh
 
 # Optional dependencies.
 option (ENABLE_CANVAS          "Build canvasapp (headless canvas host, Phase 0 seam)" OFF)
+option (ENABLE_CLASSICNET      "Build the ClassicNet host network slice (Phase 1, N1 host wiring)" OFF)
 option (ENABLE_FRIBIDI          "Use the GNU FriBidi library for bidirectional text" ON)
 option (ENABLE_FRIBIDI_BUILD    "Build the GNU FriBidi library (if OFF, try pkg-config)" OFF)
 option (ENABLE_HARFBUZZ         "Use the HarfBuzz library to shape text" ON)
@@ -899,6 +900,12 @@ if (ENABLE_CANVAS)
         # Native app menu bar (canvasmenu_impl_SDL.m) links AppKit/Foundation only.
         target_link_libraries (canvaswin PRIVATE "-framework Foundation" "-framework AppKit")
     endif ()
+endif ()
+
+# ClassicNet host network slice (Phase 1 -- N1). Only runs when the option is
+# on; the stock SDL/OpenSSL `app` and the canvas hosts are unaffected.
+if (ENABLE_CLASSICNET)
+    include (ClassicNet)
 endif ()
 
 # Deployment.

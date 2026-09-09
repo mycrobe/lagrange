@@ -328,6 +328,49 @@ lagrange's OS 9 canvas host lands (Phase M):
   Inertia/scroll-finished (`iBit(10)/iBit(11)`) are *not* exposed by the
   SDL2 patch (no momentum phase), so they stay unset here.
 
+## Phase 1 host wiring (N1) — ClassicNet on the host
+
+- **Submodule pin is not starscape's.** starscape's `vendor/ClassicNet`
+  sits one local-ahead commit (`57ca5db`, "cn_tls: optional client-cert
+  identity in CN_TlsCreate") beyond the public `origin/darwin8-transport`
+  tip; that commit was never pushed, so `git fetch origin darwin8-transport`
+  cannot reach it. lagrange therefore pins the **origin tip `8e0df7a`**, which
+  has a **6-arg `CN_TlsCreate(tls, inner, hostname, caPem, caLen, out)`**.
+  The delta (client-cert identity → 10-arg `CN_TlsCreate`) is the Gemini auth
+  model (a later milestone), so N1 does not need it. Bump the pin to the
+  client-cert commit *and* switch to the 10-arg call when it lands.
+- **Host mbedTLS 3.6 (`mbedtls-host3`) is a gitignored build artifact** under
+  `vendor/ClassicNet/deps/`, provisioned by `scripts/setup-classicnet.sh`
+  (`git clone --branch v3.6.0` + `make lib`). It is the vanilla host build of
+  the same 3.6 line the PPC/darwin8 flavors use, so the host slice exercises
+  the same wire behaviour. mbedTLS 3.6 `make lib` emits harmless
+  `-Wunterminated-string-initialization` warnings in `ssl_tls13_keys.c`; the
+  PPC build needed `MBEDTLS_FATAL_WARNINGS=Off` for the same thing.
+- **classicnet's sanitizers are directory-scoped.** `add_compile_options`
+  `-fsanitize=address,undefined` inside `vendor/ClassicNet` apply to that
+  subdir's targets only. An executable defined in the *parent* (the lagrange
+  smoke test, `gmclassicnet_smoke`) that links `libclassicnet.a` must add its
+  own `-fsanitize=address,undefined` + link flags or the final link fails with
+  undefined `__asan_*`. The `classicnet` PUBLIC compile definitions
+  (`CN_HOST`, `CN_WITH_DARWIN8`, `CN_WITH_MBEDTLS`) and include dirs (incl.
+  `MBEDTLS_ROOT/include`) *do* propagate — headers need only `link classicnet`.
+- **`CN_TLS_FORCE_TLS12` is a compile definition you put on the classicnet
+  target**, not a ClassicNet CMake option: `target_compile_definitions(classicnet
+  PRIVATE CN_TLS_FORCE_TLS12=1)` after `add_subdirectory`. It makes cn_tls.c cap
+  the max TLS version at 1.2 (the on-target-verified safe floor).
+- **Driving `cn_darwin8` + `cn_tls` manually (the smoke's pump):** the darwin8
+  connect needs a **POLLOUT (write)** wait — `CN_Darwin8Wait(&tcp, ms, 1)` —
+  because `d8_poll` only reports connect completion on write readiness; the
+  mbedTLS **handshake and body read drive off POLLIN (read-wait)** —
+  `CN_Darwin8Wait(&tcp, ms, 0)` — because a freshly connected socket's send
+  side rarely blocks, so the ClientHello flushes and the subsequent work is
+  reads. Retry semantics: `mbedtls_ssl_write` on `WANT_READ/WANT_WRITE`
+  requires the **same** app-data pointer/length, so in a send loop do **not**
+  advance `sent` when the transport reports `got==0`; only advance past bytes
+  actually accepted. A Gemini server sends `20 text/gemini\r\n<body>` then
+  closes, so read until EOF (`recv` returning `eof`), find the **first CRLF**
+  as the head terminator, treat the first two bytes as the status.
+
 ## Dead ends (proven — do not retry) **[starscape]**
 
 - Secure Transport on Tiger/Classic: TLS 1.0 max — double dead for gemini.

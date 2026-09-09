@@ -11,3 +11,4 @@ build-*/
 /.cache/
 /.jked/
 /plan/
+/logs/

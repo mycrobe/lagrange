@@ -101,14 +101,19 @@ the_Foundation classes over `CNTransport` — "escaping SDL" again, now
   backend for the canvas build; stock `app` keeps OpenSSL.
 
 Milestones (host-verifiable; **each gates on its test before the next**):
-- **N1 — host wiring.** Vendor ClassicNet (host slice) + host mbedTLS
-  (Starscape's `mbedtls-host3` tree) into the lagrange build; a host
-  smoke test does a real Gemini/HTTPS fetch over `cn_darwin8` + `cn_tls`.
-  *Evidence already on disk:* ClassicNet's own host build passes 13/13
-  tests on this Mac (incl. `test_darwin8` — the transport — and
-  `test_h2_download` — real I/O); host mbedTLS libs are present.
+- **N1 — host wiring.** ✅ **DONE (2026-09-09).** Vendor ClassicNet (host
+  slice) + host mbedTLS (Starscape's `mbedtls-host3` tree) into the lagrange
+  build; a host smoke test does a real Gemini/HTTPS fetch over `cn_darwin8` +
+  `cn_tls`. *Evidence:* ClassicNet's own host build passes 13/13 ASan tests
+  on this Mac (incl. `test_darwin8` — the transport — and `test_h2_download` —
+  real I/O) and the real Gemini smoke fetch returns a `20 text/gemini` head
+  (2x status) with a non-empty body, verified against a test CA.
   **Test gate:** ClassicNet host slice tests stay 13/13 (ASan) + the
-  smoke-fetch script asserts a non-empty body + 2xx status.
+  smoke-fetch asserts a non-empty body + 2xx status. See STATUS.md. Note the
+  submodule pin: starscape's ClassicNet is one local-ahead (unpushed) commit
+  (`57ca5db`, 10-arg client-cert `CN_TlsCreate`); lagrange pins the public
+  `origin/darwin8-transport` tip `8e0df7a` (6-arg `CN_TlsCreate`) — client-cert
+  identity is the Gemini auth milestone.
 - **N2 — the seam.** Implement the `Socket`/`TlsRequest` backends over
   `CNTransport` (the bulk of the code; iteration-heavy).
   **Test gate:** host unit tests of both backends against ClassicNet's
