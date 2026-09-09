@@ -838,6 +838,41 @@ if (ENABLE_CANVAS)
     target_compile_options (canvasapp PUBLIC ${canvasOpts})
     target_link_libraries (canvasapp PUBLIC the_Foundation::the_Foundation)
 
+    # Interactive SDL2-windowed canvas host for the Phase 0 seam: full app sources
+    # compiled against the shim framebuffer, real SDL2 used for I/O only
+    # (viewer backend sdlview.c, own TU). Zero SDL calls inside the widget kit.
+    set (CANVASWIN_SOURCES ${CANVAS_SOURCES})
+    list (REMOVE_ITEM CANVASWIN_SOURCES src/ui/canvas/canvasmain.c)
+    list (APPEND CANVASWIN_SOURCES
+        src/ui/canvas/canvasmain.c
+        src/ui/canvas/sdlview.c
+    )
+    add_executable (canvaswin ${CANVASWIN_SOURCES} ${RESOURCES})
+    add_dependencies (canvaswin resources)
+    set_property (TARGET canvaswin PROPERTY C_STANDARD 11)
+    if (TARGET ext-deps)
+        add_dependencies (canvaswin ext-deps)
+    endif ()
+    target_include_directories (canvaswin PUBLIC
+        src
+        src/ui/canvas
+        src/ui/canvas/include
+        ${CMAKE_CURRENT_BINARY_DIR}
+    )
+    set (canvasWinDefs ${canvasDefs})
+    list (REMOVE_ITEM canvasWinDefs LAGRANGE_CANVAS_VIEWER=0)
+    list (APPEND canvasWinDefs LAGRANGE_CANVAS_VIEWER=1)
+    target_compile_definitions (canvaswin PUBLIC ${canvasWinDefs})
+    target_compile_options (canvaswin PUBLIC
+        ${canvasOpts}
+    )
+    pkg_check_modules (SDL2_VIEW REQUIRED sdl2>=2.0.8)
+    target_include_directories (canvaswin PUBLIC ${SDL2_VIEW_INCLUDE_DIRS})
+    # Real SDL2 is loaded via dlopen from sdlview.c (RTLD_LOCAL), NOT linked:
+    # a direct link would bind the app's SDL_* calls to the real library under
+    # two-level namespace, silently bypassing the sdlcompat shim.
+    target_link_libraries (canvaswin PUBLIC the_Foundation::the_Foundation
+        "-Wl,-rpath,${SDL2_VIEW_LIBDIR}")
 endif ()
 
 # Deployment.
