@@ -1421,6 +1421,11 @@ void captureRender_canvas(SDL_Renderer *r, const char *path) {
 
 int windowCount_canvas(void) { return g_numWindows; }
 
+/* The app's pixel ratio: renderer output size / window size, both derived from
+   g_canvasScale in this backend. Exposed to the viewer (sdlview.c) so it can scale
+   per-pixel wheel deltas from window points into canvas-pixel units. */
+int canvasScale_canvas(void) { return g_canvasScale; }
+
 SDL_Renderer *rendererOfWindow_canvas(int index) {
     if (index < 0 || index >= g_numWindows) return NULL;
     return g_windows[index]->renderer;

@@ -69,17 +69,28 @@ override with `CANVAS_PREF_DIR`) — never the user's real
 Verification: `src/ui/canvas/tests/shimtext.c` (see its README) — the
 glyph-cache pipeline is **bit-exact vs real SDL2** at 1x and 2x. User-
 verified in the windowed viewer: all text renders (menus, tabs, URL
-field, sidebar), document link clicks navigate, hover works.
+field, sidebar, banner headline), document link clicks navigate, hover
+works with the pointing-hand cursor, sidebar clicks act.
 
 ## In-flight
 
-1. **Banner headline raster** ("LAGRANGE" ASCII-art banner garbled) —
-   the last known visual bug; separate from the fixed blend issues.
-2. **Mac menu bar**: SDL lagrange moves menus to the native menu bar;
-   shim builds show the in-window menu row instead (expected for phase
-   0; note for future Aqua backend).
-3. **Trackpad scroll**: wheel events verified flowing with sane deltas;
-   needs user re-test with the new window-event forwarding.
-4. Cleanup: diagnostics traces in sdlcompat.c/canvasmain.c are env-
+1. **Trackpad scroll too fast** — **root-caused and fixed in tree**
+   (`src/ui/canvas/sdlview.c`, `src/ui/canvas/sdlcompat.c`), awaiting
+   tactile confirm. Root cause was NOT a 2x pixel mismatch: the windowed
+   viewer forces `CANVAS_SCALE=2` (pixelRatio 2) but the py-pixel flag
+   lagrange sets in `ev.wheel.direction` (`iBit(9)` = `1u<<8`) was never
+   set by sdlview, so every widget hit the *notched* wheel path and
+   multiplied each small trackpad delta by `3 * lineHeight` /
+   `3 * itemHeight` — massive overspeed. sdlview now, when the patched
+   SDL2 reports `which==0` (precise scroll), sets
+   `WHEEL_FLAG_PERPIXEL`, forwards `which`/`preciseX`/`preciseY`, and
+   scales `preciseY * g_canvasScale` into canvas-pixel units — matching
+   `src/platform/macos.m`. Headless `canvasapp` smoke + both canvas
+   targets build clean; the real check is a trackpad scroll in
+   `canvaswin` (kills/flushes the old binary first per AGENTS.md).
+2. **Mac menu bar is TODO**: SDL lagrange moves menus to the native
+   menu bar; shim builds show the in-window menu row instead (fine for
+   phase 0; note for future Aqua backend).
+3. Cleanup: diagnostics traces in sdlcompat.c/canvasmain.c are env-
    gated (`CANVAS_LOG_*`); fine to keep, but review before any commit.
    Evidence/diagnostic captures live in `/tmp/kilo/` (VOLATILE).

@@ -233,6 +233,22 @@ lagrange's OS 9 canvas host lands (Phase M):
   still evaluates `r->target->w` for the args — the ternary picks the
   string, not the deref. Crash signature: SIGSEGV at 0x0 inside
   SDL_RenderCopy only when the log env var is set.
+- **lagrange's per-pixel wheel flag is a custom bit in `direction`,
+  never set by real SDL2.** `isPerPixel_MouseWheelEvent` reads
+  `ev.wheel.direction & iBit(9)` (`iBit(n) = 1U<<(n-1)`, so bit 8 =
+  `1u<<8`), but stock SDL2 puts only `SDL_MOUSEWHEEL_NORMAL/FLIPPED`
+  (0/1) there. The native macOS backend sets it itself in
+  `src/platform/macos.m` (`setPerPixel_MouseWheelEvent`); the shim
+  viewer (sdlview.c) must too, or every widget falls into the *notched*
+  wheel path and multiplies each small trackpad delta by
+  `3 * lineHeight`/`3 * itemHeight` — symptom is "scrolling works but
+  way too fast". The patched SDL2 (`sdl2.26-macos-ios.diff`) signals
+  precise scroll by leaving `which == 0` and forcing imprecise notched
+  wheels to `which == 1`, so sdlview keys the flag off `which == 0`.
+  It then must scale the point delta by the app pixel ratio
+  (`CANVAS_SCALE`, `g_canvasScale`) to feed canvas-pixel scroll offsets.
+  Inertia/scroll-finished (`iBit(10)/iBit(11)`) are *not* exposed by the
+  SDL2 patch (no momentum phase), so they stay unset here.
 
 ## Dead ends (proven — do not retry) **[starscape]**
 

@@ -42,6 +42,12 @@ enum {
     EVT_MOUSEWHEEL = 0x403,
 };
 
+/* lagrange's per-pixel/inertia wheel flags, carried in MouseWheelEvent.direction
+   above the SDL_MOUSEWHEEL_NORMAL/FLIPPED values (see src/ui/util.h; iBit(9..11)). */
+#define WHEEL_FLAG_PERPIXEL (1u << 8)  /* iBit(9):  finger/trackpad (precise) scroll */
+#define WHEEL_FLAG_INERTIA  (1u << 9)  /* iBit(10): momentum/inertia phase */
+#define WHEEL_FLAG_FINISHED (1u << 10) /* iBit(11): scroll ended */
+
 typedef struct {
     unsigned type, timestamp, windowID;
     unsigned char state, repeat, pad1, pad2;
@@ -107,6 +113,7 @@ extern void setPresentHook_canvas(void (*cb)(int winIndex), void *unused);
 extern void setPumpHook_canvas(void (*cb)(void), void *unused);
 extern void setCursorHook_canvas(void (*cb)(int cursorId, void *unused), void *unused);
 extern int SDL_PushEvent(void *event); /* shim's SDL_PushEvent */
+extern int canvasScale_canvas(void);   /* app pixel ratio (= shim g_canvasScale) */
 
 /* --- dlsym table ---------------------------------------------------------- */
 
@@ -275,13 +282,31 @@ static void pumpHook_(void) {
                 break;
             }
             case EVT_MOUSEWHEEL: {
-                typedef struct { unsigned type, timestamp, windowID, which; int x, y, direction; } ev_w;
+                typedef struct { unsigned type, timestamp, windowID, which; int x, y; unsigned direction; float preciseX, preciseY; int mouseX, mouseY; } ev_w;
                 ev_w s;
                 memset(&s, 0, sizeof(s));
                 s.type = EVT_MOUSEWHEEL;
+                s.windowID = ev.wheel.windowID;
+                s.which = ev.wheel.which;
+                s.direction = ev.wheel.direction;
+                s.preciseX = ev.wheel.preciseX;
+                s.preciseY = ev.wheel.preciseY;
+                s.mouseX = ev.wheel.mouseX;
+                s.mouseY = ev.wheel.mouseY;
                 s.x = ev.wheel.x;
                 s.y = ev.wheel.y;
-                s.direction = ev.wheel.direction;
+                /* The patched SDL2 (sdl2.26-macos-ios.diff) sends precise trackpad scrolls
+                   on mouseID 0 (with fractional preciseX/Y) and marks imprecise notched
+                   wheels with mouseID 1. lagrange needs the per-pixel flag set (and the
+                   delta scaled to canvas pixels, see src/platform/macos.m) so document and
+                   list widgets take the fractional-delta path instead of treating every
+                   tick as a notched 3*lineHeight step — the shoulder-mounted overspeed. */
+                if (s.which == 0) {
+                    s.direction |= WHEEL_FLAG_PERPIXEL;
+                    const float scale = (float) canvasScale_canvas();
+                    s.x = (int) (s.preciseX * scale);
+                    s.y = (int) (s.preciseY * scale);
+                }
                 SDL_PushEvent((void *)&s);
                 break;
             }
