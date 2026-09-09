@@ -81,6 +81,11 @@ harness, stock SDL build still green.
 - `the_Foundation` darwin8 + Retro68 builds: expect to shim/replace
   POSIX-ish bits (threads → TM shim on M-tier; native pthread on
   darwin8), atomics, time, paths, sockets.
+- Typography groundwork (host-testable, do while toolchains spin): the
+  per-spec `smooth` attribute + glyph-cache-key change in
+  `src/render/text_stb.c`/`src/fontpack.c`, and assemble the
+  pixel-aligned bitmap-source TTF fontpack for M-tier UI — see the
+  Typography section under Phase 2.
 
 ### Phase 2 — ClassicNet networking (MD- and T-tier shared backend)
 
@@ -111,10 +116,67 @@ Per earlier analysis (paradigms more similar than the T-tier):
   rebuilt at the same points, posting back into `postCommand_App`. Use
   `MenuHook`/`TESetIdleHook` for `CN_Idle` keep-alives during menu tours.
 - Fonts: keep the STB/lagrange fontpack stack — no FOND/FONT resources,
-  no WorldScript/TEC layer (UTF-8 preserved).
+  no WorldScript/TEC layer (UTF-8 preserved). See "Typography" below for
+  the rendering decisions that follow from this.
 - Audio: Sound Manager double-buffer backend, or compiled out v1.
 - Memory budgets: verify against a low-RAM G3 profile in QEMU early; the
   widget kit's bands are above Starscape's (~50K ctx / 256K buffers).
+
+### Typography — font rendering decisions (informs Phases 2/3)
+
+Analysis of the current stack (`src/fontpack.c`, `src/render/text_stb.c`):
+load TTF → FriBidi reorder → HarfBuzz shape → stb_truetype rasterize
+(8-bit grayscale, unhinted) → RGBA4444 glyph atlas → `SDL_RenderCopy`
+quads. All pieces except SDL are optional already: HarfBuzz and FriBidi
+are compile-out with a working `runSimple_Font_` fallback; stb_truetype is
+self-contained C. Everything runs fine against a software framebuffer
+(the `ENABLE_CANVAS`/`sdlcompat.c` seam proves it on the host). No
+FreeType/SDL_ttf anywhere.
+
+Key structural fact: smoothing is decided at *rasterization time per
+glyph* via the palette chosen in `glyphPalette_()` (`text_stb.c:542`) —
+`grayscale` (alpha ramp) vs `blackAndWhite` (1-bit, alpha≤100 threshold).
+Both palette variants can coexist in one atlas and blend correctly at
+draw time. So per-context smoothing is a small change:
+
+- **Per-font smoothing attribute** instead of the global
+  `prefs.fontSmoothing`: new `smooth` key per font spec in
+  `res/fontpack.ini` (same knob pattern as `glyphscale`/`voffset`).
+  `glyphPalette_()` consults the `iFont` being rasterized. Two call
+  sites to thread the font through (lines 554, 783).
+- **Cache-key bit**: fold the smooth flag into the glyph cache key so a
+  font used at identical size in both UI and document contexts doesn't
+  get a glyph rasterized under one palette reused under the other.
+- Runtime toggling machinery (`app.c:4429` cache-flush path) becomes
+  unnecessary — smoothing is fixed per spec at font-load time.
+
+Tier policy:
+
+- **Classic (M-tier)**: UI chrome and menus render **1-bit** (smoothing
+  off) using **pixel-aligned outline TTFs** — faces generated from
+  bitmap sources (BDF/FON-derived, e.g. px437/unscii-class conversions)
+  whose outlines trace exact pixel edges. This is the only reliable way
+  to get a period-correct Platinum-sharp look: stb does no hinting or
+  grid-fitting, so ordinary outline fonts at 9–13 ppem in 1-bit produce
+  broken stems and filled bowls; pixel-aligned outlines bypass the
+  hinting gap entirely (unhinted rasterization of grid-locked outlines
+  is exact). Ship as a small built-in fontpack — fontpack specs are
+  data, no code. Document view gets stb grayscale AA (its gamma is
+  linear, `text_stb.c:467` TODO; tune palette values if needed after
+  visual runs). Body text in pure 1-bit stays an optional taste
+  fallback via per-spec `smooth` = off.
+- **Aqua (T-tier)**: full grayscale AA everywhere (the normal lagrange
+  look); same per-spec machinery means nothing special is needed — pick
+  smoothing per spec for consistency, don't force 1-bit through
+  AppKit's `NSBitmapImageRep` path.
+- Oversampling/majority-threshold rasterization is the fallback for
+  any UI font that must be an ordinary outline TTF (helps, doesn't fix
+  grid alignment — avoid needing it).
+
+Risks tracked: HarfBuzz 2.8.2 on Retro68 is the heavy C++ build on the
+M-tier (FriBidi is small pure C — trivial); glyph-atlas memory on the
+low-RAM profile measured in Phase 2's QEMU budget check; tone/quality
+of 1-bit document text accepted/adjusted after first real-hardware run.
 
 ### Phase 3 — Aqua (10.4/10.5 PPC) UI
 

@@ -185,6 +185,55 @@ lagrange's OS 9 canvas host lands (Phase M):
   converted wrong — raw PPM is ground truth; don't downscale before
   asking a vision model to read bitmap fonts. **[starscape]**
 
+## Canvas shim ↔ real SDL2 parity (host, phase 0)
+
+- **Blend `NONE` is a straight copy in SDL software render**: color mod
+  applies, src alpha ignored for color, dst alpha *replaced*, alpha mod
+  has no effect. Anything else (blending "by hand" under NONE) garbles
+  the glyph-cache fill (bufTex→cache) and composites wrong forever
+  after. Dst-alpha over-formula is linear: `sA + dA*(255-sA)/255` — a
+  quadratic `sA*sA` variant compounds wrongly. The
+  `src/ui/canvas/tests/shimtext.c` harness pins this bit-exactly vs
+  real SDL2 at 1x and 2x.
+- **`SDL_SetRenderTarget` resets the clip rect.** A stale clip silently
+  clips away glyph-cache *writes* — glyphs then "draw" from empty cache
+  cells: at 2x only stray fragments (an "i"-looking dash) survived.
+  Looked like a rasterizer bug; it wasn't.
+- **`SDL_RenderClear` must honor the draw-color alpha**: prerendered
+  TextBufs clear to `(255,255,255,0)`; forcing the clear opaque painted
+  white boxes behind every input-field glyph.
+- **`SDL_TOUCH_MOUSEID` is `(Uint32)-1`, not 0.** Defining it as 0 made
+  every real mouse match the touch-mouse check in `mouseCoord_Window`,
+  which then returned `latestPosition_Touch()` = (0,0): sidebar list
+  clicks un-hovered but never acted. Symptom signature: "hover works,
+  click deselects hover, no action".
+- **The app gates widget drawing on `isExposed_Window`** — a window
+  that never receives `SDL_WINDOWEVENT_EXPOSED`/`ENTER` stays blank
+  forever. Exposure is only *forced* in the state-restore path, so
+  first-run + shim = blank canvas; `SDL_ShowWindow` must synthesize
+  SHOWN/EXPOSED.
+- **Two-level namespace bites dlopen+direct-link mixes**: canvaswin
+  directly linked libSDL2 (for sdlview) *and* defined shim symbols in
+  the same image; app calls recorded at link time bound to the real
+  dylib, silently bypassing the shim (shim traces never fired, real
+  `SDL_GetMouseState` returned (0,0) from the wrong window). Fix:
+  dlopen-only, `RTLD_LOCAL`, never link the real SDL into a shim
+  binary. Symptom signature: some shim traces fire, others never do.
+- **`open --args` / bundle staleness**: `CanvasWin.app` is hand-assembled;
+  a rebuild only refreshes `build-canvas/canvaswin` — the bundle keeps
+  running the OLD binary (cost: a phantom 100% CPU "hang" that was just
+  the busy-wait `SDL_Delay` + headless mode). `cp` the binary in and
+  re-codesign after every rebuild. `open` may silently fail to launch;
+  direct shell launch works.
+- **Canvas builds must not read the real user config**: `~/.config/
+  lagrange`'s saved window state restored a second (blank) window that
+  stole event routing. Isolated state dir via `SDL_GetPrefPath`.
+- **Instrumentation can be the crash**: a debug `fprintf` that
+  dereferences `r->target` behind a `r->target ? "a" : "b"` ternary
+  still evaluates `r->target->w` for the args — the ternary picks the
+  string, not the deref. Crash signature: SIGSEGV at 0x0 inside
+  SDL_RenderCopy only when the log env var is set.
+
 ## Dead ends (proven — do not retry) **[starscape]**
 
 - Secure Transport on Tiger/Classic: TLS 1.0 max — double dead for gemini.
