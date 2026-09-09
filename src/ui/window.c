@@ -2059,14 +2059,14 @@ void draw_MainWindow(iMainWindow *d) {
         SDL_SetRenderTarget(d->base.render, NULL);
         SDL_RenderCopy(d->base.render, d->backBuf, NULL, NULL);
     }
-#if 0
     /* Text cache debugging. */ {
-        SDL_Rect rect = { d->roots[0]->widget->rect.size.x - 640, 0, 640, 2.5 * 640 };
-        SDL_SetRenderDrawColor(d->render, 0, 0, 0, 255);
-        SDL_RenderFillRect(d->render, &rect);
-        SDL_RenderCopy(d->render, glyphCache_Text(), NULL, &rect);
+        if (getenv("CANVAS_DEBUG_TEXTCACHE")) {
+            SDL_Rect rect = { d->base.roots[0]->widget->rect.size.x - 640, 0, 640, 2.5 * 640 };
+            SDL_SetRenderDrawColor(d->base.render, 0, 0, 0, 255);
+            SDL_RenderFillRect(d->base.render, &rect);
+            SDL_RenderCopy(d->base.render, glyphCache_Text(), NULL, &rect);
+        }
     }
-#endif
     SDL_RenderPresent(w->render);
     isDrawing_ = iFalse;
 }

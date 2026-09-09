@@ -121,6 +121,10 @@ static const char *defaultDataDir_App_ = "~/AppData/Roaming/fi.skyjake.Lagrange"
 #define EMB_BIN "resources.lgr" /* loaded from assets with SDL_rwops */
 static const char *defaultDataDir_App_ = NULL; /* will ask SDL */
 
+#elif defined (LAGRANGE_CANVAS)
+#define EMB_BIN   LAGRANGE_EMB_BIN
+static const char *defaultDataDir_App_ = NULL; /* SDL_GetPrefPath, isolated per CANVAS_PREF_DIR */
+
 #elif defined (iPlatformLinux) || defined (iPlatformTerminal) || defined (iPlatformOther)
 #define EMB_BIN   "../../share/lagrange/resources.lgr"
 #define EMB_BIN2  "../../../share/lagrange/resources.lgr"

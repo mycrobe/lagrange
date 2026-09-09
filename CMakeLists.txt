@@ -72,6 +72,7 @@ set    (CACERT_PEM_PATH         "" CACHE FILEPATH "Root CA cacert.pem file to in
 set    (RESOURCES_LGR_PATH      "" CACHE STRING "Additional location to check when searching 'resources.lgr'")
 
 # Optional dependencies.
+option (ENABLE_CANVAS          "Build canvasapp (headless canvas host, Phase 0 seam)" OFF)
 option (ENABLE_FRIBIDI          "Use the GNU FriBidi library for bidirectional text" ON)
 option (ENABLE_FRIBIDI_BUILD    "Build the GNU FriBidi library (if OFF, try pkg-config)" OFF)
 option (ENABLE_HARFBUZZ         "Use the HarfBuzz library to shape text" ON)
@@ -88,6 +89,11 @@ if (ENABLE_MOBILE_HANDHELD)
 endif ()
 if (IOS)
     set (ENABLE_APP_BUNDLE ON)      # required
+endif ()
+if (ENABLE_CANVAS)
+    set (ENABLE_GUI OFF)
+    set (ENABLE_IPC OFF)            # headless host never enqueues to a GUI instance
+            # canvas host is its own target; SDL build unaffected
 endif ()
 
 include (BuildType)
@@ -392,7 +398,7 @@ if (IOS)
     PROPERTIES
         MACOSX_PACKAGE_LOCATION Resources
     )
-elseif (APPLE)
+elseif (APPLE AND NOT ENABLE_CANVAS)
     list (APPEND SOURCES
         src/platform/macos.m
         src/platform/macos.h
@@ -414,7 +420,7 @@ if (MSYS OR MINGW OR WIN32)
         src/platform/win32.h
     )
 endif ()
-if (MSYS OR MINGW OR WIN32 OR (UNIX AND NOT MOBILE AND NOT APPLE))
+if (MSYS OR MINGW OR WIN32 OR (UNIX AND NOT MOBILE AND NOT APPLE) OR ENABLE_CANVAS)
     add_definitions (-DiPlatformPcDesktop=1)
 endif ()
 if (MOBILE)
@@ -606,6 +612,14 @@ if (ENABLE_GUI)
         if (TARGET SDL2::SDL2-static AND ENABLE_STATIC)
             target_link_libraries (app PUBLIC SDL2::SDL2-static)
         else ()
+            # SDL backend of the canvas seam: app sources compile against the
+            # stub headers in src/ui/canvas/include, which pass through to the
+            # real SDL2 headers via include_next (LAGRANGE_CANVAS_SDL_BACKEND).
+            target_include_directories (app PUBLIC
+                ${CMAKE_SOURCE_DIR}/src/ui/canvas/include
+                BEFORE
+            )
+            target_compile_definitions (app PUBLIC LAGRANGE_CANVAS_SDL_BACKEND=1)
             target_include_directories (app PUBLIC ${SDL2_INCLUDE_DIRS})
             target_compile_options (app PUBLIC ${SDL2_CFLAGS})
             target_link_libraries (app PUBLIC ${SDL2_LDFLAGS})
@@ -764,6 +778,66 @@ if (ENABLE_TUI)
         # when nothing is happening.
         target_compile_definitions (tuiapp PUBLIC LAGRANGE_ENABLE_IDLE_SLEEP=1)
     endif ()
+endif ()
+
+if (ENABLE_CANVAS)
+    # Headless canvas host (Phase 0): full portable core + widget kit against the
+    # sdlcompat framebuffer shim. No window system, no platform/ backend files.
+    set (CANVAS_SOURCES ${SOURCES})
+    list (REMOVE_ITEM CANVAS_SOURCES src/main.c)
+    list (REMOVE_ITEM CANVAS_SOURCES src/ui/touch.c)
+    list (APPEND CANVAS_SOURCES
+        src/ui/canvas/sdlcompat.c
+        src/ui/canvas/sdlcompat.h
+        src/ui/canvas/touch_stub.c
+        src/ui/canvas/canvasmain.c
+        src/updater.c
+    )
+    add_executable (canvasapp ${CANVAS_SOURCES} ${RESOURCES})
+    add_dependencies (canvasapp resources)
+    set_property (TARGET canvasapp PROPERTY C_STANDARD 11)
+    if (TARGET ext-deps)
+        add_dependencies (canvasapp ext-deps)
+    endif ()
+    target_include_directories (canvasapp PUBLIC
+        src
+        src/ui/canvas
+        src/ui/canvas/include
+        ${CMAKE_CURRENT_BINARY_DIR}
+    )
+    # Dev build identity (AGENTS.md version-string policy): non-release
+    # builds describe their state and carry the HEAD short hash.
+    execute_process (
+        COMMAND git rev-parse --short HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE LAG_DEV_GIT_SHA
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    set (LAGRANGE_DEV_SUFFIX "phase0-shim" CACHE STRING "Version suffix describing this build flavor")
+    set (LAG_DEV_VERSION "${PROJECT_VERSION}-dev+${LAGRANGE_DEV_SUFFIX} (${LAG_DEV_GIT_SHA})")
+    set (canvasDefs
+        LAGRANGE_CANVAS=1
+        LAGRANGE_CANVAS_VIEWER=0
+        LAGRANGE_EMB_BIN="${CMAKE_CURRENT_BINARY_DIR}/resources.lgr"
+        LAGRANGE_APP_VERSION="${LAG_DEV_VERSION}"
+        LAGRANGE_ENABLE_AUDIO=1
+        LAGRANGE_ENABLE_STB_TRUETYPE=1
+        LAGRANGE_HAVE_SDL_TEXTEDITING=1
+    )
+    set (canvasOpts
+        -Werror=implicit-function-declaration
+        -Wno-deprecated-declarations
+        -DSTB_VORBIS_NO_STDIO=1
+        -DSTB_VORBIS_NO_INTEGER_CONVERSION=1
+    )
+    target_compile_definitions (canvasapp PUBLIC ${canvasDefs})
+    if (CFLAG_INCOMPATIBLE_POINTER_TYPES)
+        target_compile_options (canvasapp PUBLIC -Werror=incompatible-pointer-types)
+    endif ()
+    target_compile_options (canvasapp PUBLIC ${canvasOpts})
+    target_link_libraries (canvasapp PUBLIC the_Foundation::the_Foundation)
+
 endif ()
 
 # Deployment.
