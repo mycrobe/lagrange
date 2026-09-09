@@ -16,7 +16,10 @@ this Mac** (incl. `test_darwin8`, the transport, and `test_h2_download`, real
 I/O); host mbedTLS (`mbedtls-host3`) is present. Plan: **N1** vendor ClassicNet
 host slice + host mbedTLS + a real-fetch smoke test → **N2** the
 `Socket`/`TlsRequest` seam → **N3** wire into `canvaswin` so the viewer
-actually fetches a Gemini page.
+actually fetches a Gemini page. **Tests as you go** is now explicit in PLAN.md:
+each of N1/N2/N3 gates on its host test before the next (ASan/UBSan), and the
+networking stack gets host *unit* tests against ClassicNet's loopback
+`CNTransport` plus *integration* tests against a real server.
 
 **Typography is parked** (was a host-testable Phase-1 item). Classic renders
 **grayscale AA** (CopyBits has no per-pixel alpha → a software src-over

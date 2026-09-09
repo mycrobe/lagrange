@@ -100,17 +100,25 @@ the_Foundation classes over `CNTransport` — "escaping SDL" again, now
 - A compile-time switch (`LAGRANGE_CLASSICNET`) selects the ClassicNet
   backend for the canvas build; stock `app` keeps OpenSSL.
 
-Milestones (host-verifiable):
+Milestones (host-verifiable; **each gates on its test before the next**):
 - **N1 — host wiring.** Vendor ClassicNet (host slice) + host mbedTLS
   (Starscape's `mbedtls-host3` tree) into the lagrange build; a host
   smoke test does a real Gemini/HTTPS fetch over `cn_darwin8` + `cn_tls`.
   *Evidence already on disk:* ClassicNet's own host build passes 13/13
   tests on this Mac (incl. `test_darwin8` — the transport — and
   `test_h2_download` — real I/O); host mbedTLS libs are present.
+  **Test gate:** ClassicNet host slice tests stay 13/13 (ASan) + the
+  smoke-fetch script asserts a non-empty body + 2xx status.
 - **N2 — the seam.** Implement the `Socket`/`TlsRequest` backends over
   `CNTransport` (the bulk of the code; iteration-heavy).
+  **Test gate:** host unit tests of both backends against ClassicNet's
+  loopback `CNTransport` (framing + audiences + cert-verify → `gmcerts`),
+  ASan/UBSan clean; `build-host` stock `app` still green.
 - **N3 — into the canvas app.** Wire the seam into `canvaswin` so the
   viewer actually fetches a Gemini page over ClassicNet.
+  **Test gate:** integration test fetches a real Gemini URL, asserting
+  status/meta/body + the TOFU pin/mismatch gate; `canvaswin` shows the
+  page.
 
 ### Phase 2 — Build systems (enabling toolchain, parallel)
 
@@ -271,6 +279,24 @@ only — correctness is covered by AA).
 Host-side portable tests (ASan/UBSan) → QEMU guest (OS 9; scripted,
 repeatable) → real hardware (petal, iMac G4 10.4.11). Evidence captures
 per Starscape's pattern; machine-specific evidence never enters the repo.
+
+**Tests as you go (2026-09-09, explicit).** Every milestone lands with its
+host test before the next starts; the stock `app` build stays green as the
+regression gate. Unit and integration tests are written alongside the code
+they cover — especially the networking stack (host machine):
+
+- **Unit tests** (host, ASan/UBSan, no network): the new
+  `Socket`/`TlsRequest` backends are driven against **ClassicNet's
+  loopback/fake `CNTransport`** (the design doc's own host-test seam), so
+  byte-stream/TLS framing + the `connected`/`readyRead`/`error`/`finished`
+  audiences — and the cert-verify mapping to `gmcerts` — are exercised
+  without the network. A the_Foundation-side CTest target in `build-host`.
+- **Integration tests** (host, real network): an actual Gemini/HTTPS fetch
+  over `cn_darwin8` + `cn_tls` against a real server, asserting
+  status/meta/body and the TOFU certificate pin/mismatch gates. Run in the
+  same pass as the unit tests.
+- ClassicNet's *own* host slice tests are the transport/protocol layer's
+  regression gate and must keep passing (currently 13/13 on this Mac).
 
 ## Version support matrix ("no-SDL3" era)
 
