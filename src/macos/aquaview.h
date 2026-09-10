@@ -15,3 +15,14 @@
 int  initAquaView_app(int width, int height);
 void deinitAquaView_app(void);
 void runAquaMainLoop(void);
+
+/* Autorelease-pool frame helpers.  aquamain.c is plain C, so it cannot create an
+   NSAutoreleasePool itself, but the whole [NSApp run] lifecycle autoreleases on
+   the main thread (menu building, run-loop event/window/timer churn) and on
+   Tiger AppKit does not supply a pool for every event the way modern macOS does
+   -- without an enclosing pool every such object lands in _NSAutoreleaseNoPool
+   and leaks.  main() wraps its body in begin/end so every main-thread
+   autorelease has a home; the widget-kit tick (aquaview.m) additionally uses a
+   per-frame pool so the timer-driven render churn drains each frame. */
+void *beginAutoreleasePool_Aqua(void);
+void  endAutoreleasePool_Aqua(void *pool);

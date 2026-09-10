@@ -48,12 +48,21 @@ int main(int argc, char **argv) {
         if (errLog) {
             FILE *f = freopen(errLog, "wb", stderr);
             if (!f) fprintf(stdout, "cannot open %s\n", errLog);
+            else    setvbuf(stderr, NULL, _IONBF, 0);   /* the log is our post-mortem tool */
         }
         else if (getenv("AQUA_DEBUG")) {
             FILE *f = freopen("/tmp/L4.log", "wb", stderr);
-            if (f) fprintf(stderr, "[aqua] stderr->/tmp/L4.log\n");
+            if (f) {
+                setvbuf(stderr, NULL, _IONBF, 0);
+                fprintf(stderr, "[aqua] stderr->/tmp/L4.log\n");
+            }
         }
     }
+
+    /* Enclosing autorelease pool for the whole main-thread lifecycle (menu + UI
+       assembly, SDL_Init, and everything [NSApp run] autoreleases on Tiger).
+       aquamain.c is C, so the pool frame lives in aquaview.m; see aquaview.h. */
+    void *pool = beginAutoreleasePool_Aqua();
 
     setCiphers_TlsRequest("ECDHE-ECDSA-AES256-GCM-SHA384:"
                           "ECDHE-ECDSA-CHACHA20-POLY1305:"
@@ -95,5 +104,6 @@ int main(int argc, char **argv) {
     deinitAquaView_app();
     SDL_Quit();
     deinit_Foundation();
+    endAutoreleasePool_Aqua(pool);
     return 0;
 }

@@ -111,13 +111,21 @@ container with the darwin8 toolchain):
      `-[NSApplication setAppleMenu:]` (`canvasmenu_impl_aqua.m`) — the rebuilt
      `L4.app` now shows a single bold `L4` app menu next to the Apple logo
      (About/Preferences/Hide/Quit), no duplicate, and still renders the Gemini
-     page. Evidence: `~/classic/petal/logs/l4-aqua-menufix-2026-09-10.png` +
-     `-...txt` (vs the bug `l4-aqua-menubug-2026-09-10.png`); root cause in
-     docs/arcana.md. **Native Cmd shortcuts work** via menu-first key-equivalent handling +
-   a widget-kit fallback in the Aqua window; quitting is clean (`atexit`
-   `deinit_Foundation` so the AppKit-exit host doesn't trip the Foundation
-   assert). Evidence: `~/classic/petal/logs/l4-aqua-native-menu-2026-09-10.png`.
-   **Remaining:** the glyph `〉` (U+3009, sidebar collapse arrow) missing from the
+      page. Evidence: `~/classic/petal/logs/l4-aqua-menufix-2026-09-10.png` +
+      `-...txt` (vs the bug `l4-aqua-menubug-2026-09-10.png`); root cause in
+      docs/arcana.md. **The `_NSAutoreleaseNoPool` flood is also GONE (proven
+      on-device, 2026-09-10):** `[NSApp run]`+timer under Tiger has no automatic
+      pool per event, so `main()` now wraps its body in an NSAutoreleasePool frame
+      (`begin/endAutoreleasePool_Aqua`, exposed to C `aquamain.c`) and `tick:` uses
+      a per-frame pool; the app-owned log is unbuffered (`setvbuf` `_IONBF`) so the
+      `[aqua]` stage markers flush (they were sitting in a 4KB buffer, lost on a
+      crash). 614 leak lines before → 0 (evidence
+      `~/classic/petal/logs/l4-aqua-poolfix-2026-09-10.txt`); details in
+      docs/arcana.md. **Native Cmd shortcuts work** via menu-first key-equivalent handling +
+    a widget-kit fallback in the Aqua window; quitting is clean (`atexit`
+    `deinit_Foundation` so the AppKit-exit host doesn't trip the Foundation
+    assert). Evidence: `~/classic/petal/logs/l4-aqua-native-menu-2026-09-10.png`.
+    **Remaining:** the glyph `〉` (U+3009, sidebar collapse arrow) missing from the
    bundled fontpack (`failed to find 00003009`); context-menu popups
    (`showPopupMenu_MacOS` needs an `NSEvent`, deferred); a real network fetch +
    TOFU screenshot (the app does fetch over ClassicNet — `[classicnet] TCP/TLS

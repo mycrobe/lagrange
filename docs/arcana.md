@@ -344,7 +344,31 @@ dropped the need for it, which is exactly why lagrange's own modern menu code
 path `[[[NSApp mainMenu] itemAtIndex:0] submenu]` and assumes 10.6+ app-menu
 detection, and must not be cargo-culted onto the pre-10.6 Aqua host. Evidence:
 `~/classic/petal/logs/l4-aqua-menubug-2026-09-10.png` + `-menubug-...txt`.
+
+**Tiger AppKit under `[NSApp run]` + a timer needs explicit autorelease pools, and
+the app-owned log must be unbuffered (durable, 2026-09-10).** A nibless Aqua host
+driven by `[NSApp run]` (aquaview.m `runAquaMainLoop`) + a ~60Hz `NSTimer` calling
+`step_App()` floods stderr with `_NSAutoreleaseNoPool` (`NSAutoreleasePool no pool
+in place`) — AppKit does NOT supply an automatic pool for every run-loop event the
+way modern macOS does, and `step_App` (event dispatch + render + present) and the
+menu/UI assembly autorelease a steady stream of Foundation/AppKit objects (NSFont,
+NSImage, NSCFString, NSCFArray, NSCFDate, NSCFTimer …) that then never release.
+Fix is twofold: (1) `main()` wraps its whole body in an NSAutoreleasePool frame
+(exposed to the C `aquamain.c` as `beginAutoreleasePool_Aqua`/`endAutoreleasePool_Aqua`,
+since C can't build a pool), so every main-thread autorelease has a home; and
+(2) `tick:` uses its own per-frame pool so the timer-driven churn drains every frame
+instead of accumulating in the outer pool. Verified: 614 `_NSAutoreleaseNoPool`
+lines before, 0 after (evidence `l4-aqua-poolfix-2026-09-10.txt`).
+Also: after `freopen(errLog, "wb", stderr)` the FILE is fully buffered and the
+`[aqua]` stage lines sit in a 4KB buffer — a Finder-launched app that crashes never
+flushes them, killing the post-mortem story. Call `setvbuf(stderr, NULL, _IONBF, 0)`
+after the freopen so the stage markers (and any error) hit the disk immediately.
+Bit-rot trap: `killall`/`pkill` may not reap a straggler `./L4` (single-instance per
+user — a fresh launch forwards its args to the running one and silently exits); kill
+by PID (`ps aux | grep L4 | awk '{print $2}'` → `kill -9`) before relaunching.
 `[2026-09-10]`
+*Retro68/68k note: the M-tier Toolbox host has no such pool problem (no NSObject
+autorelease; the Menu Manager is manual), so this is Aqua/T-tier only.*
 **[2026-09-10]**
 NOT `iBigEndian`. Any `#if defined (iBigEndian)` in the_Foundation source is a
 no-op on all builds (the macro is never defined), silently forcing the

@@ -390,14 +390,29 @@ static void cursorHookAqua_(int cursorId, void *unused) {
 @implementation AquaWidgetTimer
 - (void)tick:(NSTimer *)timer {
     (void) timer;
+    /* Each tick must be an autorelease island: on Tiger AppKit does not provide
+       an automatic pool for every run-loop event, and step_App drives the widget
+       kit (event dispatch + render + present + autolayout) which autoreleases a
+       steady stream of Foundation/AppKit objects.  Without a per-frame pool they
+       hit _NSAutoreleaseNoPool and never release. */
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     step_App(postedEventsOnly_AppEventMode);
     /* The widget kit may have quit (isRunning = false) on SDL_QUIT / a "quit"
        command; unwind AppKit's loop so the process actually exits. */
     if (!isAppRunning()) {
         [[NSApplication sharedApplication] terminate:nil];
     }
+    [pool drain];
 }
 @end
+
+/* C-visible autorelease-pool helpers for aquamain.c (which is C). */
+void *beginAutoreleasePool_Aqua(void) {
+    return [[NSAutoreleasePool alloc] init];
+}
+void endAutoreleasePool_Aqua(void *pool) {
+    [(NSAutoreleasePool *)pool drain];
+}
 void runAquaMainLoop(void) {
     /* Run the AppKit main loop and step the widget kit from a 60Hz timer.  A
        bare NSApplication never populates the OS menu bar unless [NSApp run]
