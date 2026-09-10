@@ -178,6 +178,55 @@ ours:      canvas_seam   stub SDL headers ↔ real backend (sdlview / Aqua / Too
   glibc 2.38+ needed). Build dir + flag set live in a `osx/CMakeLists.txt`
   + wrapper-script pattern, docker-wrapped — not host-native. **[starscape T-2]**
 
+### the_Foundation on darwin8 (Tiger) — the db-verified POSIX gaps
+
+Porting the_Foundation (lagrange's portable core) to Tiger cross-build
+surfaced four real gaps, all "core assumes modern macOS/POSIX" — the
+legacy Open Question "which modules compile as-is vs shim" got a concrete
+answer:
+
+- **`libunistring` is a MANDATORY the_Foundation dep** (`Depends.cmake`
+  `FATAL_ERROR`s without `unistr.h`; `string.c`/`punycode.c` call
+  `u8_normalize`/`u8_mbsnlen`/`u8_check`/`u8_to_u32`). It is NOT optional
+  and is absent from PLAN.md Phase-2's dep list — add it. Cross-build the
+  GNU tarball (`--host=powerpc-apple-darwin8 --disable-shared
+  --enable-static`) into `vendor/ClassicNet/deps/libunistring-darwin8`
+  (gitignored, like mbedtls-d8). **Verify the tarball against GNU's
+  detached `.sig`** — `gpgv --keyring gnu-keyring.gpg <t>.tar.xz.sig <t>.tar.xz`
+  (fetch the keyring from ftp.gnu.org; `gpg` isn't on this box, `gpgv` is).
+- **libunistring's gnulib thread detection fails on Tiger**: the 10.4u SDK
+  exports `pthread_create` as an *inline*, so gnulib concludes "no real
+  pthread API" (`gl_pthread_api=no`, `PTHREAD_CREATE_IS_INLINE=1`) and
+  `lib/mbtowc-lock.h` matches **no** branch — leaving `mbtowc_with_lock`
+  undefined and both `mbrtowc.c`/`mbrtoc32.c` failing to compile
+  (`implicit declaration`). `--enable-threads=posix` does NOT fix it (the
+  underlying pthread link probe is what's fooled). The fix: define
+  `AVOID_ANY_THREADS 1` in the generated `config.h` — that routes
+  `mbtowc-lock.h` to the self-contained no-lock branch. (This makes
+  libunistring's own mbrtowc single-threaded; the_Foundation uses UTF-8
+  strings so the mbtowc path isn't exercised, and this is a stopgap
+  pending the proper threadlib cache override.) **[2026-09-10]**
+- **`strnlen` / `clock_gettime` / `pthread_setname_np`** — all absent on
+  Tiger (strnlen ≥10.7, clock_gettime ≥10.12, Apple pthread_setname_np
+  ≥10.6). the_Foundation's `string.c`/`time.c`/`thread.c` use them
+  unconditionally. Shim: `osx/darwin8_posix_shim.h`, force-included
+  (`-include`) into ONLY the darwin8 the_Foundation build via
+  `-DDARWIN8`; each is `static inline` (strnlen over `memchr`,
+  clock_gettime over `gettimeofday`, pthread_setname_np no-op). If the
+  shim only reaches the_Foundation's own TUs, nothing leaks into the
+  final link. **[2026-09-10]**
+- **`<spawn.h>` (posix_spawn)** — absent on Tiger. `platform/posix/process.c`
+  includes it unconditionally for the `iProcess` class. Provide a REAL
+  implementation (`osx/darwin8_sdk_shim/spawn.{h,c}`) over fork+execve
+  (close/dup2 file actions), not a declaration-only stub — a fake header
+  that only satisfies the compile would silently break `iProcess` (e.g.
+  OpenURL) at the full app's link. Added PRIVATE to the_Foundation as an
+  include dir + one source. **[2026-09-10]**
+
+These shims are candidate material to migrate into the_Foundation's
+`src/platform/apple.c`/`posix/` behind an OS-version check, on the
+`classicnet-seam` branch. `d8_tls_smoke` (osx) is the on-device proof.
+
 ## Tiger AppKit (T-tier UI)
 
 Era-correct AppKit facts, expect all of these again when wiring

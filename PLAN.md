@@ -155,10 +155,14 @@ Milestones (host-verifiable; **each gates on its test before the next**):
   darwin8 slice (`cn_d8`) + mbedTLS-d8 into `build-osx/d8_smoke` (a PPC
   Mach-O), verified on petal (Tiger 10.4.11) with a real Gemini fetch over
   `cn_darwin8` + `cn_tls`. See STATUS.md. Next: cross-build `the_Foundation`
-  (+ the seam) and the Aqua canvas host.
+  (+ the seam) and the Aqua canvas host. ✅ **the_Foundation + seam DONE
+  (2026-09-10)**: `the_Foundation` (static, `TFDN_CLASSICNET=ON`) cross-compiles
+  for Tiger and `osx/d8_tls_smoke` fetches on petal via `iTlsRequest`; see
+  STATUS.md. Onward: Aqua canvas host.
 - Cross-build vendored deps per tier: mbedTLS (`mbedtls-darwin8` from
-  Starscape; an `mbedtls-ppc` Retro68 build), freetype unnecessary (STB
-  text rendering is self-contained; keep `text_stb`).
+  Starscape; an `mbedtls-ppc` Retro68 build), **libunistring** (`deps/libunistring-darwin8`,
+  a mandatory the_Foundation dep the original list missed), freetype
+  unnecessary (STB text rendering is self-contained; keep `text_stb`).
 - `the_Foundation` darwin8 + Retro68 builds: expect to shim/replace
   POSIX-ish bits (threads → TM shim on M-tier; native pthread on
   darwin8), atomics, time, paths, sockets.
@@ -340,9 +344,12 @@ they cover — especially the networking stack (host machine):
 - [ ] the_Foundation on Retro68: which modules compile as-is vs shim?
       (socket/request/tls get replaced by ClassicNet; threadpool, eventloop,
       addressinfo need review.)
-- [ ] the_Foundation on darwin8: expecting near-native (poll/pthread exist
-      on Tiger); verify `-lresolv`/64-bit-division quirks from Starscape
-      don't recur.
+- [x] the_Foundation on darwin8: answered (2026-09-10) — near-native EXCEPT
+      four gaps: mandatory `libunistring` (cross-build, gnulib
+      `AVOID_ANY_THREADS` config fix), `strnlen`/`clock_gettime`/
+      `pthread_setname_np` (shim), and `<spawn.h>`/`posix_spawn` (shim).
+      `-lresolv` + the 64-bit-division quirks did NOT recur. See
+      docs/arcana.md "the_Foundation on darwin8" + STATUS.md.
 - [ ] App-layer feature trim for M-tier: which widgets to freeze (e.g. no
       media streaming, no misfin, no GPub, single-window) — decide per
       memory/simplicity budget before Phase 2.

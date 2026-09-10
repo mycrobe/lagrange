@@ -90,3 +90,88 @@ target_link_libraries(cn_d8 PUBLIC
 #     TOFU pin is layered by the app above this seam).  Run on petal. ---
 add_executable(d8_smoke d8_smoke.c)
 target_link_libraries(d8_smoke cn_d8 -lresolv -Wl,-force_cpusubtype_ALL)
+
+# --- the_Foundation + ClassicNet seam cross-build (darwin8) -------------------
+# The big next slice: get the_Foundation (socket.c/tlsrequest.c ClassicNet
+# backends, selected by TFDN_CLASSICNET) cross-compiling for Tiger so lagrange's
+# real gmrequest/gmcerts fetch path ports.  Built as a static lib (TFDN_STATIC)
+# and linked against cn_d8 (ClassicNet darwin8 slice) + mbedTLS-d8.
+#
+# Mandatory the_Foundation dependency: libunistring, cross-built for darwin8
+# into deps/libunistring-darwin8 (see the arcana entry; the GNU 1.4.2 tarball,
+# source + build under deps/libunistring-*, is a gitignored local artifact).
+set (LIBUNISTRING_D8 "${CLASSICNET_DIR}/deps/libunistring-darwin8")
+if (NOT EXISTS "${LIBUNISTRING_D8}/include/unistr.h")
+    message (FATAL_ERROR
+        "libunistring (darwin8) missing at ${LIBUNISTRING_D8} -- cross-build the "
+        "GNU 1.4.2 tarball from deps/ (--host=powerpc-apple-darwin8 "
+        "--disable-shared --enable-static, AVOID_ANY_THREADS config fix; see arcana).")
+endif ()
+
+set (TFDN_STATIC_LIBRARY      ON  CACHE BOOL "" FORCE)
+set (TFDN_ENABLE_INSTALL      OFF CACHE BOOL "" FORCE)
+set (TFDN_ENABLE_TESTS        OFF CACHE BOOL "" FORCE)
+set (TFDN_ENABLE_WEBREQUEST   OFF CACHE BOOL "" FORCE)
+set (TFDN_ENABLE_WARN_ERROR   OFF CACHE BOOL "" FORCE)
+set (TFDN_ENABLE_TLSREQUEST   ON  CACHE BOOL "" FORCE)
+set (TFDN_CLASSICNET          ON  CACHE BOOL "" FORCE)  # socket/tls seam over ClassicNet
+set (TFDN_ENABLE_SSE41        OFF CACHE BOOL "" FORCE)   # no SSE on PPC
+set (TFDN_ENABLE_DEBUG_OUTPUT OFF CACHE BOOL "" FORCE)
+set (TFDN_ENABLE_MUTEX_DEBUG  OFF CACHE BOOL "" FORCE)
+
+# libunistring for darwin8 (tells Depends.cmake where the cross-built tree is;
+# iconv stays linked from libSystem, so no separate iconv lib).
+set (UNISTRING_DIR  "${LIBUNISTRING_D8}" CACHE PATH   "" FORCE)
+set (UNISTRING_ICONV NO                    CACHE BOOL "" FORCE)
+
+add_subdirectory (${CMAKE_CURRENT_SOURCE_DIR}/../lib/the_Foundation
+                  ${CMAKE_CURRENT_BINARY_DIR}/the_Foundation)
+add_library (the_Foundation::the_Foundation ALIAS the_Foundation)
+
+if (TARGET the_Foundation)
+    # Attach ClassicNet + mbedTLS-d8 usage requirements so the classicnet
+    # socket.c/tlsrequest.c seam compiles against the same defines/includes as
+    # cn_d8 (CN_WITH_DARWIN8/MBEDTLS + the d8 userconfig, the MACCORE headers
+    # that cn_types.h pulls in, and the mbedTLS include dir).
+    target_include_directories (the_Foundation PUBLIC
+        ${CLASSICNET_DIR}/include
+        ${CLASSICNET_DIR}/target
+        ${MBEDTLS_D8_ROOT}/include
+        ${MACCORE}
+    )
+    target_compile_definitions (the_Foundation PUBLIC
+        CN_WITH_DARWIN8=1
+        CN_WITH_MBEDTLS=1
+        CN_TLS_FORCE_TLS12=1
+        "MBEDTLS_USER_CONFIG_FILE=\"d8_userconfig.h\""
+    )
+    target_link_libraries (the_Foundation PUBLIC cn_d8)
+
+    # Tiger POSIX shims (strnlen / clock_gettime / pthread_setname_np): the
+    # the_Foundation core sources assume modern macOS/POSIX.  Force-include the
+    # darwin8 build-time shim (static inline no-ops/equivalents) so they compile
+    # unchanged.  PRIVATE: only the_Foundation's own TUs need it, not consumers.
+    # See osx/darwin8_posix_shim.h + docs/arcana.md.
+    target_compile_definitions (the_Foundation PRIVATE DARWIN8=1)
+    target_compile_options (the_Foundation PRIVATE
+        -include ${CMAKE_CURRENT_SOURCE_DIR}/darwin8_posix_shim.h)
+
+    # Tiger lacks <spawn.h>: provide a real posix_spawn over fork/exec so
+    # iProcess (platform/posix/process.c) compiles AND works.  The shim dir is on
+    # the include path (so `<spawn.h>` resolves) and spawn.c is compiled into the
+    # static lib.  PRIVATE to the_Foundation; see osx/darwin8_sdk_shim/ + arcana.
+    target_include_directories (the_Foundation PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/darwin8_sdk_shim)
+    target_sources (the_Foundation PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/darwin8_sdk_shim/spawn.c)
+endif ()
+
+# --- the_Foundation TLS-seam fetch proof: cross-compiles the seam and does a
+#     real Gemini fetch on-device through iTlsRequest (the gmrequest path). ---
+add_executable (d8_tls_smoke d8_tls_smoke.c)
+set_property (TARGET d8_tls_smoke PROPERTY C_STANDARD 11)
+target_link_libraries (d8_tls_smoke PRIVATE
+    the_Foundation::the_Foundation
+    -lresolv
+    -Wl,-force_cpusubtype_ALL
+)
