@@ -2910,6 +2910,39 @@ iLocalDef iBool isResizeDrawEnabled_(void) {
 }
 
 static int run_App_(iApp *d) {
+    beginAppEventLoop_App();
+    while (d->isRunning) {
+        step_App(waitForNewEvents_AppEventMode);
+    }
+    SDL_DelEventWatch(resizeWatcher_, d);
+    SDL_DelEventWatch(lifecycleWatcher_App_, d);
+#if defined (iPlatformAppleMobile)
+    SDL_DelEventWatch(wakeRunLoopOnEvent_App_, NULL);
+#endif
+    return 0;
+}
+
+/* One full event-loop iteration.  Portable hosts call this from their own main
+   loop (run_App_); a host that drives its own run loop (e.g. AppKit's [NSApp
+   run], which must own the main thread) calls it from a timer with a non-
+   blocking event mode. */
+void step_App(enum iAppEventMode mode) {
+    iApp *d = &app_;
+    processEvents_App(mode);
+    runTickers_App_(d);
+    refresh_App();
+    /* Change the widget tree while we are not iterating through it. */
+    if (d->window && d->window->type == main_WindowType) {
+        checkPendingSplit_MainWindow(as_MainWindow(d->window));
+    }
+    recycle_Garbage();
+}
+
+/* Setup required once before the first step_App(): arrange the initial roots,
+   mark the app running and install the event watchers.  Kept separate so a
+   host that owns its own main loop can replicate what run_App_ does up front. */
+void beginAppEventLoop_App(void) {
+    iApp *d = &app_;
     /* Initial arrangement. */
     iForIndices(i, d->window->roots) {
         if (d->window->roots[i]) {
@@ -2926,22 +2959,6 @@ static int run_App_(iApp *d) {
     /* Wakeup hook for the CFRunLoop-based event wait in nextEvent_App_(). */
     SDL_AddEventWatch(wakeRunLoopOnEvent_App_, NULL);
 #endif
-    while (d->isRunning) {
-        processEvents_App(waitForNewEvents_AppEventMode);
-        runTickers_App_(d);
-        refresh_App();
-        /* Change the widget tree while we are not iterating through it. */
-        if (d->window && d->window->type == main_WindowType) {
-            checkPendingSplit_MainWindow(as_MainWindow(d->window));
-        }
-        recycle_Garbage();
-    }
-    SDL_DelEventWatch(resizeWatcher_, d);
-    SDL_DelEventWatch(lifecycleWatcher_App_, d);
-#if defined (iPlatformAppleMobile)
-    SDL_DelEventWatch(wakeRunLoopOnEvent_App_, NULL);
-#endif
-    return 0;
 }
 
 void refresh_App(void) {
@@ -3121,6 +3138,24 @@ int run_App(int argc, char **argv) {
     const int rc = run_App_(&app_);
     deinit_App(&app_);
     return rc;
+}
+
+/* Public run-loop entry points for hosts that own their own main loop (the
+   Aqua host runs AppKit's [NSApp run] and steps the widget kit from a timer).
+   run_App() above keeps the blocking behaviour for every other host. */
+void init_App(int argc, char **argv) {
+    init_App_(&app_, argc, argv);
+}
+
+void deinit_App_Instance(void) {
+    deinit_App(&app_);
+}
+
+/* True while the widget kit's event loop should keep running.  A host that runs
+   its own main loop checks this to know when to unwind it (e.g. close the app
+   when the widget kit quits). */
+iBool isAppRunning(void) {
+    return app_.isRunning;
 }
 
 void postRefresh_Window(iAnyWindow *windowPtr) {

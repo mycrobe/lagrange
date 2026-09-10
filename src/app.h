@@ -104,6 +104,11 @@ iLocalDef enum iAppDeviceType deviceType_App(void) {
 }
 
 int                 run_App                     (int argc, char **argv);
+void                init_App                    (int argc, char **argv);
+void                deinit_App_Instance         (void);
+iBool               isAppRunning                (void);
+void                beginAppEventLoop_App       (void);
+void                step_App                    (enum iAppEventMode mode);
 void                processEvents_App           (enum iAppEventMode mode);
 iBool               handleCommand_App           (const char *cmd);
 void                refresh_App                 (void);

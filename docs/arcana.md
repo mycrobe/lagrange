@@ -227,6 +227,249 @@ These shims are candidate material to migrate into the_Foundation's
 `src/platform/apple.c`/`posix/` behind an OS-version check, on the
 `classicnet-seam` branch. `d8_tls_smoke` (osx) is the on-device proof.
 
+**Mandatory deps revealed by the full app (the Aqua host, 2026-09-10):** the
+seam-only `d8_tls_smoke` never touched `iRegExp`/`iArchive`, so PCRE2 and zlib
+were invisible. The full widget kit needs both:
+
+- **PCRE2 10.47 (`deps/pcre2-darwin8`)** — `gmdocument.c` calls
+  `replaceRegExp_String`/`iRegExp`; `the_Foundation` only builds `regexp.c`
+  when PCRE2/PCRE is found (`iHaveRegExp` → `regexp.h` APIs). Cross-build the
+  tarball `--host=powerpc-apple-darwin8 --disable-shared --enable-static
+  --enable-unicode --disable-pcre2grep --disable-pcre2test` (sig-verified via
+  gpg; the GitHub release is signed by a PCRE2 release manager). **Bug:**
+  `the_Foundation`'s `tfdn_link_depends()` adds PCRE1 include dirs but only
+  PCRE2 *libs* (its include-dir block omits `PCRE2_INCLUDE_DIRS`) — so
+  `regexp.c` can't find `pcre2.h`. Workaround: `target_include_directories(
+  the_Foundation PUBLIC ${PCRE2_INCLUDE_DIRS})` + `target_link_directories(
+  ... PUBLIC ${PCRE2_LIBRARY_DIRS})` in the consumer's CMake; the clean fix
+  belongs in the the_Foundation fork. **[2026-09-10]**
+- **zlib (`iHaveZlib`)** — `archive.h` only declares `iArchive` under
+  `iHaveZlib`; resources/fontpack need it. Tiger ships zlib in libSystem, so
+  no cross-build: the cross container lacks pkg-config, so give it a module.
+  `osx/pkgconfig/zlib.pc` (points at the 10.4u SDK `usr/lib`, `-lz`) +
+  install `pkg-config` in the container. `scripts/build-osx.sh` now carries
+  `PKG_CONFIG_PATH=/work/vendor/ClassicNet/deps/pcre2-darwin8/lib/pkgconfig:/work/osx/pkgconfig`.
+  `iHaveZlib` may also be force-cached as a belt-and-suspenders. **[2026-09-10]**
+
+**Aqua host on-device run — the resource-archive blocker, ROOT CAUSE FOUND
+(2026-09-10).** The `L4.app` cross-build is proven (PPC Mach-O), and launched
+on petal it reached the AppKit UI-construction stage (the run's autorelease spam
+shows NSFont/NSImage/NSView being created for the window's content → the
+WindowServer connection works). It then aborted at resource loading:
+
+```
+failed to load resources: Unknown error: 0    (errno 0; init_Resources returns iFalse)
+```
+
+`init_Resources()` → `openFile_Archive()` → `readDirectory_Archive_()` failed on
+the PPC target while the *identical* `resources.lgr` (a valid zip) loaded fine on
+the host canvas app. The version gate is NOT the cause (`init_Version` drops the
+dev/app suffix, so the lgr's `VERSION` matches). **Root cause: an endianness-guard
+typobug in `the_Foundation`'s stream.c.** `config.h.in` emits `iHaveBigEndian`
+(from CMake's `test_big_endian()`, CMakeLists.txt:158), but the byte-order
+selection in `stream.c:54` tested `#if defined (iBigEndian)` — a macro that is
+NEVER defined anywhere. So every build, including the big-endian PPC, compiled
+the *native-little-endian* ordering functions. On the PPC target the defaults are
+mirrored (`order32le_` etc. swap), so a little-endian ZIP's central directory and
+EOCD signature were read byte-swapped: `seekToCentralEnd_()` never matched
+`SIG_END_OF_CENTRAL_DIR` and `readDirectory_Archive_()` returned iFalse. It never
+surfaced before because `d8_tls_smoke` never touched `iArchive`, and the host
+(x86, little-endian) is unaffected. **Fix:** change the guard to
+`#if defined (iHaveBigEndian)` (the_Foundation `classicnet-seam` `005d88b`).
+A focused on-device reproducer (`osx/d8_archive_smoke.c`) now opens the same
+`resources.lgr` on petal, parses all 62 entries (correct names/sizes, deflate
+method), and inflates a deflated entry — evidence
+`~/classic/petal/logs/lagrange-d8-archive-tfdn-2026-09-10.txt`. The embedded
+`iFile`/`iStream`/ZIP path is byte-order-correct on Tiger. `logs/aqua-petal-runtime-2026-09-10.txt`
+is the (pre-fix) run evidence. Also note the execPath quirk: app.c builds
+`execPath` by appending argv[0]'s basename to `SDL_GetBasePath()`, so
+`execPath/../resources.lgr` is always ENOTDIR — a deployed bundle needs an
+absolute `LAGRANGE_EMB_BIN` (`-DAQUA_EMB_BIN=/path/resources.lgr`, the host
+canvas uses an absolute path too).
+
+**Finder/LaunchServices injects a `-psn_<serial>` argv — strip it in the Aqua
+main (durable).** Mac OS X GUI apps launched from Finder/`open` receive a
+`-psn_0_<pid>` argument identifying them to the WindowServer; SDL's own backend
+normally swallows it, but this canvas host drives `run_App()` with its raw argv,
+and the portable CommandLine parser rejects it as `Unknown option: p` and
+`terminate_App_(1)`s — the app dies instantly with no window. `src/macos/aquamain.c`
+filters `-psn_*` out of argv before `run_App`. On Tiger `open` also refuses a
+bare-exec (WindowServer: `bootstrap_register` 1100), and `launchctl setenv`
+does NOT propagate to a LaunchServices-launched app; bake env vars into the
+bundle's `Info.plist` `LSEnvironment` instead (e.g. `AQUA_ERRLOG` → the app-owned
+logfile, `AQUA_DEBUG`). `osx/Info.plist`'s `LSEnvironment` is added at deploy
+time by editing the deployed plist (Tiger has no `PlistBuddy`; use perl).
+**[2026-09-10]**
+
+**Aqua host must run `[NSApp run]` for the native menu bar, and step the widget
+kit from a timer (durable).** A bare `NSApplication` (no nib) driven by a manual
+pump hook (`nextEventMatchingMask:untilDate:0` = an immediate non-blocking poll)
+NEVER runs AppKit's main loop, so on Tiger the OS menu bar is not populated —
+`setMainMenu:` with a fully-built `NSMenu` (verified via a hardcoded probe) still
+shows only the app-name stub; re-activating the app and short run-loop drains
+don't help. The real fix is to let `[NSApp run]` own the main thread and drive
+the widget kit from a ~60Hz `NSTimer`: this is why `run_App` was split into
+`init_App` + `beginAppEventLoop_App` + `step_App(eventMode)` + `deinit_App_Instance`
+(`src/app.c`/`app.h`); `aquaview.m`'s `runAquaMainLoop` installs the timer
+(calling `step_App(postedEventsOnly_AppEventMode)`) and calls `[NSApp run]`.
+Quitting: the widget kit's `SDL_QUIT`/`"quit"` just flips `isRunning` (a
+`step_App` loop var), it does NOT unwind `[NSApp run]` — the timer checks
+`isAppRunning()` and calls `[NSApp terminate:]` (this exits via AppKit, so
+`main()`'s normal teardown never runs; `[NSApp stop:]` doesn't reliably unwind
+the run loop). Because the host exits through AppKit, `deinit_Foundation()` is
+registered with `atexit` in `aquamain.c` (atexit runs last-registered-first, so
+it cleans up before the_Foundation's own atexit check) — without it, quitting
+emits a `!isInitialized_Foundation()` at-exit assertion.
+Cmd-shortcuts: macOS routes Cmd-combos through `performKeyEquivalent:` before
+`keyDown:`; the native menu bar renders but its `NSMenuItem` key equivalents do
+NOT fire under the `[NSApp run]`+timer model (unless the host explicitly asks),
+so the Aqua window's `performKeyEquivalent:` first tries
+`[[NSApp mainMenu] performKeyEquivalent:event]` (menu key equivalents win) then
+forwards unhandled Cmd-combos to the widget kit as SDL key events. The app menu
+is `mainMenu[0]` (must exist at init or the widget kit's `insertItem` at index 1
+crashes): the backend creates it titled `L4` and populates About/Preferences/Quit.
+**Tiger/Leopard needs an explicit `setAppleMenu:` nomination (durable, 2026-09-10).**
+On Tiger (10.4) the initial belief that titling index 0 "L4" makes AppKit merge it
+into a single app-process menu is WRONG (verified on petal — the menu bar showed a
+bold app-name `L4` AND a second plain `L4`). Pre-SnowLeopard AppKit does NOT treat
+a programmatically-set main menu's first item as the application menu; a nibless
+app gets AppKit's own synthesised bold app-name menu prepended, so the backend's
+own index-0 `L4` lands as a second, plain menu beside it. The fix (and the exact
+workaround documented for Leopard): call the long-unannounced-but-still-live
+`-[NSApplication setAppleMenu:]` with the index-0 submenu, declaring the selector
+in a category (`canvasmenu_impl_aqua.m`) — the same selector the nib loader calls
+to nominate the app menu. Snow Leopard (10.6) auto-identifies `mainMenu[0]` and
+dropped the need for it, which is exactly why lagrange's own modern menu code
+(`macos.m`, `canvasmenu_impl_SDL.m`) works without ever calling it: that modern
+path `[[[NSApp mainMenu] itemAtIndex:0] submenu]` and assumes 10.6+ app-menu
+detection, and must not be cargo-culted onto the pre-10.6 Aqua host. Evidence:
+`~/classic/petal/logs/l4-aqua-menubug-2026-09-10.png` + `-menubug-...txt`.
+`[2026-09-10]`
+**[2026-09-10]**
+NOT `iBigEndian`. Any `#if defined (iBigEndian)` in the_Foundation source is a
+no-op on all builds (the macro is never defined), silently forcing the
+native-little-endian path — byte-swap correct on x86, WRONG on any big-endian
+target (PPC/PPC64). Big-endian builds that read little-endian streams (ZIP
+archives, `serialize_*`/`deserialize_*` persisted data) fail to parse. This is
+the classic "works on the host, breaks on the target, no crash just garbage"
+class. If a future big-endian port (M-tier OS 9 is also 68k/PPC big-endian)
+misbehaves reading persisted blobs, check this guard first. **[2026-09-10]**
+
+### libunistring cross-build — the full recipe (darwin8 + Retro68)
+
+`libunistring` is a MANDATORY the_Foundation deps (see above) and is absent from
+PLAN.md Phase 2's dep list. Both tiers now cross-build it via
+`scripts/setup-libunistring.sh [retro68|darwin8]` (toolchain, tarball sig/SHA-256
+verify, sources, patch, build, install into `deps/libunistring-<target>/`).
+Notes that cost real time (both frozen 1.4.2):
+
+- **GNU `.sig` needs `gpgv`, which is NOT on the host.** The arcana above said
+  "gpg isn't on this box, gpgv is" — true only *inside the amd64 container*
+  where the darwin8 build ran. On the host the Retro68 build hits `gpgv: command
+  not found`, so the script falls back to a **pinned SHA-256**
+  (`5b46e74377ed7409c5b75e7a96f95377b095623b689d8522620927964a41499c` for
+  `libunistring-1.4.2.tar.xz`, computed from the GNU-sig-verified download).
+- **`socklen_t` hard error (Retro68 only).** Classic Mac has Open Transport, no
+  BSD sockets, so gnulib's `gl_TYPE_SOCKLEN_T` can't find an equivalent and
+  aborts: `error: Cannot find a type to use in place of socklen_t`. The socket
+  modules are only *indicators* (no socket `lib/*.c` is built — 86 `.c`, all
+  Unicode), so a cache override is safe: `gl_cv_socklen_t_equiv=int` →
+  `config.h` `#define socklen_t int`. darwin8/Tiger *does* have `<sys/socket.h>`,
+  so it finds a real `socklen_t` and needs no override.
+- **`AVOID_ANY_THREADS` on BOTH tiers** (the darwin8 fix above applies verbatim to
+  Retro68): configure sets `PTHREAD_CREATE_IS_INLINE=1` (pthread_create is an
+  inline on the classic SDKs) → `gl_pthread_api=no` → `mbtowc-lock.h` matches NO
+  branch → `mbtowc_with_lock` undefined and `mbrtowc.c`/`mbrtoc32.c` fail.
+  `#define AVOID_ANY_THREADS 1` in the generated `config.h` routes it to the
+  no-lock branch.
+- **`getlocalename_l-unsafe.c` `#error` (Retro68 only).** gnulib's
+  `localename` module ends in `#error "Please port gnulib getlocalename_l-unsafe.c
+  to your platform!"` for unported OSes. darwin8 defines `__APPLE__ && __MACH__`
+  so it takes gnulib's Mac OS X branch and never reaches it; Retro68's
+  `powerpc-apple-macos-gcc` defines only `__PPC__`/`__powerpc__`, so it lands on
+  the `#error`. Might look fatal but is dead-on-arrival code (classic Mac has no
+  per-locale names). Patch: add a `#elif defined __PPC__ || defined __powerpc__
+  || defined __MACH__` branch returning `{ "C", STORAGE_INDEFINITE }` (the
+  script's perl one-liner).
+- **No `iconv` on Retro68 libc** (verified: `iconv_open`/`iconv_close` don't
+  LINK). configure sees `iconv.h` and defaults `DEPENDS_ON_LIBICONV=1`, so
+  `uniconv`'s `u8_conv_*` objects reference iconv and the M-tier the_Foundation
+  link would die with undefined `.iconv_open`. With T-tier, `osx/CMakeLists.txt`
+  sets `UNISTRING_ICONV=NO` (iconv comes from libSystem) and that's correct. For
+  Retro68, configure with `ac_cv_header_iconv_h=no am_cv_func_iconv=no` (the
+  script does) → the archive is self-contained (nm shows NO `U iconv*`). The
+  `u8_conv_*` paths then run iconv-free (a UTF-8-only workable path); the M-tier's
+  own non-UTF-8 encoding conversion is a separate open item.
+- **GNU sed warning is benign**: during `make`, libunistring's `declared.sh`
+  complains "The 'sed' program is not GNU sed" (macOS BSD sed) and then
+  "Continuing with existing libunistring.sym." — the symbol list is already
+  correct; the library builds and installs fine. Don't chase it.
+
+### the_Foundation classic C libs — PCRE2 + zlib (+ HarfBuzz/FriBidi)
+
+The mandatory GNU C libs the_Foundation links on the M-tier are cross-built for
+Retro68 via `scripts/setup-mtier-libs.sh` (→ `deps/pcre2-retro68`,
+`deps/zlib-retro68`); the text-shaping libs via
+`scripts/setup-harfbuzz-fribidi.sh` (→ `deps/harfbuzz-retro68`,
+`deps/fribidi-retro68`). mbedTLS-ppc is de-scoped here (proven in starscape on
+OS 9 via ClassicNet — do not re-litigate).
+
+- **PCRE2 10.47**. `regexp.c` (`iRegExp`) is required by `gmdocument.c`.
+  Cross-build (autotools, out-of-tree, `--host=powerpc-apple-macos
+  --disable-shared --enable-static --enable-unicode`) hits TWO Retro68 gotchas:
+  * **`int32_t` is `long` on Retro68's stdint.h (PPC32), not `int`** — so the
+    ubiquitous `int32_t *` vs `int *` pointer mix in `pcre2_compile.c`/callers
+    is a TYPE mismatch the compiler *errors* on. Both are 32-bit on PPC32, so
+    it's ABI-safe — just downgrade: build with
+    `CFLAGS="-O2 -Wno-error=incompatible-pointer-types -Wno-incompatible-pointer-types"`.
+    Do NOT patch the source (the darwin8 build needs `int32_t==int`).
+  * **`make install` compiles `pcre2grep`, which `#include <io.h>` (Windows)** and
+    dies. Install the library + headers only: build `libpcre2-8.la
+    libpcre2-posix.la`, then `cp src/pcre2.h` (generated in the *build* dir) and
+    `$SRC/src/pcre2posix.h` (source dir — NOT generated) + `.libs/*.a` into the
+    prefix. (The POSIX wrappers are exported as `pcre2_regcomp`/`pcre2_regexec`/
+    `pcre2_regerror`/`pcre2_regfree`, not plain `reg*`.)
+- **zlib 1.3.1**. `archive.c` inflates `deflated_Compression=8` ZIP entries —
+  `resources.lgr` (the app's bundled fonts/about pages) is deflated, so this is
+  REQUIRED for the M-tier app to boot, not just an optional `iHaveZlib`.
+  Gotcha: **zlib's macOS configure sets `AR=libtool -o`**, and host `libtool`
+  silently drops the non-Mach-O Retro68 objects (warnings "not a mach-o") and
+  leaves a ~96-byte **empty** `libz.a`. Archive with the Retro68 ar:
+  `make libz.a AR=powerpc-apple-macos-ar ARFLAGS=rc` (and skip
+  `example`/`minigzip`, which don't cross-link). Install `zlib.h`/`zconf.h` +
+  `libz.a` manually.
+- **HarfBuzz + FriBidi are now BUILT for Classic** (`scripts/setup-harfbuzz-fribidi.sh`
+  → `deps/harfbuzz-retro68`, `deps/fribidi-retro68`) — the original decision to
+  drop them was reversed (the user wants the shaped rendering). Both are
+  deps-free because lagrange uses HarfBuzz's **default font funcs**
+  (`hb_blob_create` → `hb_face_create` → `hb_font_create` in `fontpack.c`) and
+  rasterizes glyphs itself via stb_truetype — **no FreeType/glib/icu/cairo**.
+  Gotchas (each cost real time):
+  * **HarfBuzz 2.8.2 is meson-ONLY** (autotools `configure` was removed; only
+    `meson.build`/`CMakeLists.txt`/stale `Makefile.am` remain). Cross-build with a
+    meson cross-file (`retro68.meson-cross.txt`: `powerpc-apple-macos-gcc/-g++`,
+    `system=darwin`, `cpu_family=ppc`, `endian=big`) and
+    `-Dglib/-Dgobject/-Dfreetype/-Dicu/-Dcairo/... disabled`. **The valid 2.8.2
+    option names differ** from newer releases: `graphite` (not `graphite2`),
+    `icu` (+`icu_builtin`), `coretext`, and there is **no** `fontconfig`/`brotli`
+    option — passing those errors "Unknown option".
+  * **`HB_NO_MT` is mandatory**: Retro68 has `pthread_mutex_t` (so HarfBuzz's
+    hb-mutex.hh picks the pthread branch) but NOT the `pthread_mutex_*`
+    functions — same classic-Mac thread gap as libunistring's
+    `PTHREAD_CREATE_IS_INLINE`. `-Dcpp_args=-DHB_NO_MT` routes hb-mutex.hh to
+    the no-op lock (single-threaded target; glyph output is unchanged).
+  * **`-Wno-format`**: `hb_codepoint_t`/`uint32_t` is `unsigned long` on Retro68,
+    so `%u` in hb-font.hh/hb-aat-layout-* is a TYPE-, not ABI-, mismatch (both
+    32-bit) — harmless, but silence it or a `-Werror` build dies.
+  * **FriBidi's CLI tool fails**: `bin/fribidi-main.c` `#define false (0)` trips
+    on Retro68 — build+install only the library (`make -C lib && make -C lib
+    install`).
+  * The M-tier renderer must define `LAGRANGE_ENABLE_HARFBUZZ=1` +
+    `LAGRANGE_ENABLE_FRIBIDI=1` and link `libharfbuzz.a`/`libfribidi.a` (they
+    belong to the *app/renderer* target, not the_Foundation).
+  Other optional codecs (WebP/JXL/mpg123/opus/Sparkle) are all `*_FOUND`-gated
+  and compile out — M-tier feature trim per the plan, no build.
+
 ## Tiger AppKit (T-tier UI)
 
 Era-correct AppKit facts, expect all of these again when wiring
@@ -243,7 +486,7 @@ lagrange's canvas host into AppKit on 10.4: **[starscape T-3/T-4]**
   Guard 10.5+ selectors with `respondsToSelector:`.
 - AppKit silently swallows delegate/timer exceptions on Tiger (no crash
   log for Finder-launched apps). `@try/@catch` around UI assembly +
-  `NSSetUncaughtExceptionHandler` + app-owned logfile (`Gemini.log`
+   `NSSetUncaughtExceptionHandler` + app-owned logfile (`L4.log`
   discipline: bare execs over ssh can't even reach WindowServer).
 - Autoresize masks are edge-pinning, not flexing: bottom-pinned view =
   `NSViewMaxYMargin` (flex the TOP), and a missing width mask silently
@@ -251,6 +494,35 @@ lagrange's canvas host into AppKit on 10.4: **[starscape T-3/T-4]**
 - Deploy: ship `.app` bundles via scp (Tiger's tar rejects gzipped
   bundles); `killall` old instances by name first (Tiger instance
   stacking); `screencapture` has no `-R` (full-screen + host-side crop).
+
+lagrange's Aqua canvas host (`src/macos/aquaview.m`, cross-build DONE 2026-09-10)
+adds a few more:
+
+- **CarbonCore ships its own `resources.h`.** Do NOT do a project-wide
+  `include_directories(${MACCORE})` — it shadows lagrange's `src/resources.h`
+  for the widget kit (`window.c`'s `#include "resources.h"` grabs CarbonCore's
+  and `imageShadow_Resources`/`imageLogo_Resources` go undeclared). Attach
+  MACCORE per-target (`cn_d8`, `the_Foundation`) as PUBLIC usage requirements so
+  it lands AFTER the app's own `src/` include path.
+- **`canvasmenu_impl_SDL.m` is modern-AppKit only** — generics
+  (`NSMutableDictionary<...>`), `NSApplicationActivationPolicyRegular` (10.6+),
+  `NSEventModifierFlags` (10.6+), `popUpMenuPositioningItem:...` (10.7+). Not
+  usable on 10.4. The host uses the portable null `canvasmenu.c` (widget kit
+  draws its in-window menubar) until a `canvasmenu_impl_aqua.m` is written.
+- **10.4 has no `NSWindowDelegate`/`NSApplicationDelegate` formal protocols**
+  (delegate methods are informal) — don't declare `<NSWindowDelegate>`
+  conformance; just `@interface X : NSObject` + implement `windowWillClose:`.
+- **`[NSEvent pressedMouseButtons]` is 10.6+** — track the button bitmask in a
+  view ivar instead (set in `mouseDown:`/`mouseUp:`).
+- **`NSCursor` resize cursors (`resizeUpDownCursor`/`resizeLeftRightCursor`)
+  are 10.6+** — guard with `[NSCursor respondsToSelector:]`.
+- **ObjC needs `-std=gnu99` + `-fobjc-exceptions`** (`set(CMAKE_OBJC_FLAGS
+  "...-std=gnu99 -fobjc-exceptions")`); gnu89 rejects C99 for-loops in `.m`.
+- **Several widget-kit blocks are `#if !defined(NDEBUG)`** (renderer-info
+  texture formats, the `SDLK_KP_1` debug theme-seed shortcut) — build the Aqua
+  target with `NDEBUG` like the host canvas Release gate.
+- **10.4u SDK has no `<execinfo.h>`** (`sdlcompat.c` backtrace path) — shim it
+  (`osx/darwin8_sdk_shim/execinfo.h`, frame-pointer walk over r30).
 
 ## Classic (OS 9) runtime — QuickDraw / events / files
 

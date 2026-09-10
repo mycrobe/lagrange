@@ -12,7 +12,7 @@
 # The full Aqua canvas host (src/macos/) and the the_Foundation seam are the
 # next T-tier slices.
 #
-# Later slices build a bundle (Gemini.app) with POST_BUILD assembly, but the
+# Later slices build a bundle (L4.app) with POST_BUILD assembly, but the
 # d8_smoke tool is a bare CLI executable that ships via scp (no .app bundle
 # rule -- that's only for GUI apps that need the WindowServer).
 set -euo pipefail
@@ -30,6 +30,18 @@ if [ ! -f "$MBEDTLS_D8/library/libmbedtls.a" ]; then
     exit 1
 fi
 
+# PCRE2 (darwin8), a mandatory the_Foundation dep for the app's regexp support
+# (gmdocument.c uses iRegExp).  Cross-build the 10.47 tarball the same way as
+# libunistring: signature-verified, install into deps/pcre2-darwin8.  The
+# generated .pc lives in <prefix>/lib/pkgconfig.
+PCRE2_D8="$ROOT/vendor/ClassicNet/deps/pcre2-darwin8"
+if [ ! -f "$PCRE2_D8/lib/libpcre2-8.a" ]; then
+    echo "!! PCRE2 (darwin8) missing at $PCRE2_D8" >&2
+    echo "   cross-build the pcre2-10.47 tarball (signature-verified) into" >&2
+    echo "   deps/pcre2-darwin8; see docs/arcana.md 'the_Foundation on darwin8'." >&2
+    exit 1
+fi
+
 # Binaries land in build-osx/ (gitignored), user-owned: Docker Desktop maps
 # container-root bind-mount writes to the host user, so the container may
 # run as root (apt-get needs it).
@@ -39,8 +51,9 @@ docker run --rm --platform linux/amd64 \
     -v "$TC":/toolchain-root:ro \
     -v "$TC/ppc-tiger-xcompiler/sdk":/sdk:ro \
     -v "$ROOT":/work \
+    -e PKG_CONFIG_PATH="/work/vendor/ClassicNet/deps/pcre2-darwin8/lib/pkgconfig:/work/osx/pkgconfig" \
     ubuntu:24.04 bash -c "
-        apt-get update -qq >/dev/null && apt-get install -y -qq cmake file >/dev/null
+        apt-get update -qq >/dev/null && apt-get install -y -qq cmake file pkg-config >/dev/null
         export PATH=/gcc-install/bin:/out/bin:\$PATH
         cmake -S /work/osx -B /work/build-osx \
               -DCMAKE_TOOLCHAIN_FILE=/work/osx/darwin8.toolchain.cmake \

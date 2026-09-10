@@ -1,0 +1,13 @@
+# Tiger zlib pkg-config module.  The darwin8 cross container has no pkg-config
+# module for zlib, but the 10.4u SDK ships zlib.h + libz.dylib in libSystem, so
+# point pkg-config at the SDK so the_Foundation's Depends.cmake resolves it and
+# sets iHaveZlib (which declares iArchive, used by fontpack/resources).
+prefix=/sdk/MacOSX10.4u.sdk/usr
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: zlib
+Description: zlib compression library (Tiger, from the 10.4u SDK)
+Version: 1.2.3
+Libs: -L${libdir} -lz
+Cflags: -I${includedir}

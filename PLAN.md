@@ -158,11 +158,31 @@ Milestones (host-verifiable; **each gates on its test before the next**):
   (+ the seam) and the Aqua canvas host. ✅ **the_Foundation + seam DONE
   (2026-09-10)**: `the_Foundation` (static, `TFDN_CLASSICNET=ON`) cross-compiles
   for Tiger and `osx/d8_tls_smoke` fetches on petal via `iTlsRequest`; see
-  STATUS.md. Onward: Aqua canvas host.
+  STATUS.md. ✅ **Aqua canvas host cross-build DONE + RUNS on Tiger (2026-09-10)**:
+  the `osx/` project links the whole widget kit + shim against the seam into a
+  `L4.app` (PPC Mach-O) via a programmatic single-window AppKit host
+  (`src/macos/aquaview.m`) and, launched on petal, displays the full window with a
+  working **native NSMenu bar** (`canvasmenu_impl_aqua.m`) and **native Cmd
+  shortcuts**, plus real ClassicNet fetches. Required one more the_Foundation dep
+  — **PCRE2 10.47** (`deps/pcre2-darwin8`, regexp is mandatory for `gmdocument.c`)
+  — plus `iHaveZlib` via `osx/pkgconfig/zlib.pc` (libSystem), and the two on-device
+  blockers fixed (the_Foundation big-endian ZIP bug; Finder `-psn_` argv). The
+  app needed `[NSApp run]` for the menu bar (arcana).
 - Cross-build vendored deps per tier: mbedTLS (`mbedtls-darwin8` from
-  Starscape; an `mbedtls-ppc` Retro68 build), **libunistring** (`deps/libunistring-darwin8`,
-  a mandatory the_Foundation dep the original list missed), freetype
+  Starscape; an `mbedtls-ppc` Retro68 build), **libunistring** — a mandatory
+  the_Foundation dep the original list missed; ✅ both tiers cumulated:
+  `deps/libunistring-darwin8` (Tiger, verified) + `deps/libunistring-retro68`
+  (Classic, built, iconv-free) via `scripts/setup-libunistring.sh`; see
+  docs/arcana.md "libunistring cross-build", freetype
   unnecessary (STB text rendering is self-contained; keep `text_stb`).
+  ✅ **The other mandatory the_Foundation C libs are cross-built for Classic**
+  (2026-09-10): **PCRE2 10.47** (`deps/pcre2-retro68`, iRegExp for
+  `gmdocument.c`) + **zlib 1.3.1** (`deps/zlib-retro68`, inflates
+  `resources.lgr`) via `scripts/setup-mtier-libs.sh`; and **HarfBuzz 2.8.2 +
+  FriBidi 1.0.13** (`deps/harfbuzz-retro68`, `deps/fribidi-retro68`) via
+  `scripts/setup-harfbuzz-fribidi.sh` — HarfBuzz built WITHOUT glib/freetype/icu
+  (lagrange rasterizes glyphs via stb_truetype, needs only the default
+  hb_font_funcs) and with `HB_NO_MT`. See arcana "the_Foundation classic C libs".
 - `the_Foundation` darwin8 + Retro68 builds: expect to shim/replace
   POSIX-ish bits (threads → TM shim on M-tier; native pthread on
   darwin8), atomics, time, paths, sockets.
