@@ -1,6 +1,6 @@
 [submodule "lib/the_Foundation"]
 	path = lib/the_Foundation
-	url = https://git.skyjake.fi/skyjake/the_Foundation
+	url = git@github.com:mycrobe/the_Foundation.git
 [submodule "lib/fribidi"]
 	path = lib/fribidi
 	url = https://github.com/fribidi/fribidi.git

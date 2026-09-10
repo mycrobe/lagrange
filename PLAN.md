@@ -342,3 +342,36 @@ they cover — especially the networking stack (host machine):
       memory/simplicity budget before Phase 2.
 - [ ] Upstream-consumable split: keep backend seams shaped so skylake
       could upstream the ClassicNet+mbedTLS backend independently.
+
+## Licensing — classicnet seam (compatibility note)
+
+The ClassicNet network seam mixes two permissive licenses; they combine
+cleanly (no copyleft/taint), but the combined binary is *component-licensed*
+and redistribution must keep each license intact.
+
+| Component | License | Copyright |
+|-----------|---------|-----------|
+| lagrange | BSD-2-Clause | © Jaakko Keränen |
+| the_Foundation | BSD-2-Clause | © Jaakko Keränen |
+| ClassicNet (`vendor/ClassicNet`) | **Apache-2.0** | © Yung-Luen Lan |
+| Mbed TLS (build-time dep, not vendored here) | Apache-2.0 | Mbed-TLS |
+
+**Verdict:** Apache-2.0 (ClassicNet) is compatible with BSD-2-Clause
+(lagrange/the_Foundation): both are permissive, ClassicNet can be statically
+linked into a BSD-2-Clause app and the result distributed. They do not get
+"absorbed" — the Apache-2.0 terms continue to apply to the ClassicNet
+portion.
+
+**Redistribution obligations (the only real constraint):**
+1. Keep ClassicNet's Apache-2.0 `LICENSE`, `NOTICE`, and copyright headers
+   intact (the `NOTICE` also carries its Mbed TLS / Retro68 / RFC 7541
+   dependency + HPACK attribution).
+2. Include the Apache-2.0 §4(B) notice text for the ClassicNet portion.
+3. Keep the BSD-2-Clause notices for lagrange/the_Foundation — no relicensing
+   of those components is required or allowed.
+4. ClassicNet's Apache-2.0 patent grant applies to its own portion.
+
+**Housekeeping:** lagrange's `the_Foundation` fork is under the same
+BSD-2-Clause as upstream (the seam commits add code under that license); do not
+add an Apache-2.0 header to lagrange/the_Foundation sources. Keep ClassicNet as
+a clearly separated vendored dependency (`vendor/ClassicNet`), as it already is.
