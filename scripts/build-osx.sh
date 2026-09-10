@@ -57,7 +57,7 @@ docker run --rm --platform linux/amd64 \
         export PATH=/gcc-install/bin:/out/bin:\$PATH
         cmake -S /work/osx -B /work/build-osx \
               -DCMAKE_TOOLCHAIN_FILE=/work/osx/darwin8.toolchain.cmake \
-        && cmake --build /work/build-osx -j \$(nproc)
+        && cmake --build /work/build-osx -j \${JOBS:-2}
     "
 
 file "$ROOT/build-osx/d8_smoke"

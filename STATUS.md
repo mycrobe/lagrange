@@ -121,7 +121,22 @@ container with the darwin8 toolchain):
       `[aqua]` stage markers flush (they were sitting in a 4KB buffer, lost on a
       crash). 614 leak lines before → 0 (evidence
       `~/classic/petal/logs/l4-aqua-poolfix-2026-09-10.txt`); details in
-      docs/arcana.md. **Native Cmd shortcuts work** via menu-first key-equivalent handling +
+      docs/arcana.md. **Mouse *delivery* fixed (2026-09-10):** Tiger swallows the
+      first click on a non-key window as an activation click (`acceptsFirstMouse`
+      defaults NO) — the window's key status isn't established before the first
+      click in the `[NSApp run]`+timer model, so clicks never reached the view.
+      `-$acceptsFirstMouse` YES on `AquaCanvasView`; also `sdlPoint`/`drawCanvasInto`
+      now share a `canvasRectInView` letterbox transform so mouse coords map to the
+      shim canvas even when the window is resized. Real clicks/moves now reach the
+      widget kit (verified via gated instrumentation). **⚠️ Still broken: document
+      link activation.** Clicks reach the document and are identified as real clicks
+      (`isMoved=false`), but `view->hoverLink` stays NULL so a click never opens a
+      link. Evidence points to the mouse→document `hoverPos` being offset by the
+      banner/`viewPos` (the self-test click lands above the content, `hoverPos.y`
+      negative) plus mouse-move events being dropped by the widget kit's motion
+      accumulation (active because the Aqua build does not define `iPlatformApple`),
+      so hover never updates. The document DOES have links (`visibleLinks` n=2).
+      **This is the open mouse blocker — see docs/arcana.md.** **Native Cmd shortcuts work** via menu-first key-equivalent handling +
     a widget-kit fallback in the Aqua window; quitting is clean (`atexit`
     `deinit_Foundation` so the AppKit-exit host doesn't trip the Foundation
     assert). Evidence: `~/classic/petal/logs/l4-aqua-native-menu-2026-09-10.png`.

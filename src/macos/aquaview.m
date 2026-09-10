@@ -114,6 +114,37 @@ static Uint16 keyModFromFlags_(unsigned long f);
 
 - (BOOL)isFlipped { return NO; }
 - (BOOL)acceptsFirstResponder { return YES; }
+/* Tiger swallows the first click on a window that is not *key* as an
+   activation click and never delivers it to the content view (acceptsFirstMouse
+   defaults to NO).  Under the [NSApp run] + timer model the window's key status
+   is often not established before the user's first click, so every click can be
+   consumed as an activation click -- no mouse interaction at all.  Opt the view
+   in so the first click also gets through. */
+- (BOOL)acceptsFirstMouse:(NSEvent *)event { (void) event; return YES; }
+
+/* The shim canvas (gCanvasW_ x gCanvasH_) is letterboxed into the view: this is
+   the rect it occupies (in the view's bottom-left origin -- the view is not
+   flipped) together with the integer/fractional scale.  Letterbox instead of
+   stretch, preserving the canvas aspect so content is never distorted (mirror
+   the SDL2 host's behaviour); whole-number scale when it fits, fractional only
+   if the window is too small.  The draw path AND the mouse-coordinate mapping
+   both use this so they can never diverge. */
+- (double)canvasScaleInView {
+    const int cw = gCanvasW_, ch = gCanvasH_;
+    if (cw <= 0 || ch <= 0) return 1.0;
+    const double sx = (double) NSWidth([self bounds]) / (double) cw;
+    const double sy = (double) NSHeight([self bounds]) / (double) ch;
+    const double sf = (sx < sy) ? sx : sy;
+    return (sf >= 1.0) ? (double) ((int) sf) : sf;
+}
+
+- (NSRect)canvasRectInView {
+    const double s = [self canvasScaleInView];
+    const double dw = (double) gCanvasW_ * s, dh = (double) gCanvasH_ * s;
+    const double dx = (NSWidth([self bounds]) - dw) / 2.0;
+    const double dy = (NSHeight([self bounds]) - dh) / 2.0; /* bottom-left origin */
+    return NSMakeRect(dx, dy, dw, dh);
+}
 
 - (void)drawCanvasInto:(NSRect)bounds {
     if (!gCanvasPx_ || gCanvasW_ <= 0 || gCanvasH_ <= 0) {
@@ -121,19 +152,8 @@ static Uint16 keyModFromFlags_(unsigned long f);
         NSRectFill(bounds);
         return;
     }
-    /* Letterbox instead of stretch: preserve the canvas aspect so content is
-       never distorted (mirror the SDL2 host's behaviour).  Whole-number scale
-       when it fits (every canvas pixel -> one window pixel); fractional only if
-       the window is too small.  see sdlview.c presentHook. */
     const int cw = gCanvasW_, ch = gCanvasH_;
-    const double sx = (double) NSWidth(bounds) / (double) cw;
-    const double sy = (double) NSHeight(bounds) / (double) ch;
-    const double sf = (sx < sy) ? sx : sy;
-    const double s  = (sf >= 1.0) ? (double) ((int) sf) : sf;
-    const double dw = (double) cw * s, dh = (double) ch * s;
-    const double dx = (NSWidth(bounds) - dw) / 2.0;
-    const double dy = (NSHeight(bounds) - dh) / 2.0;
-    NSRect dst = NSMakeRect(dx, dy, dw, dh);
+    NSRect dst = [self canvasRectInView];
 
     /* dark clears the letterbox bars */
     [[NSColor colorWithCalibratedRed:0.08 green:0.08 blue:0.08 alpha:1.0] setFill];
@@ -162,11 +182,22 @@ static Uint16 keyModFromFlags_(unsigned long f);
 
 - (void)drawRect:(NSRect)r { (void) r; [self drawCanvasInto:[self bounds]]; }
 
-/* view coords are bottom-up (non-flipped); SDL expects y-down. */
+/* Map an NSEvent location to a canvas pixel.  The view is bottom-left origin
+   (unflipped) and the shim canvas is letterboxed into it (canvasRectInView), so
+   invert that transform: subtract the letterbox origin, divide by the scale,
+   and flip the vertical axis (canvas rows are top-left/y-down like SDL).  At a
+   1:1 default window/view size this reduces to the simple y flip. */
 - (NSPoint)sdlPoint:(NSEvent *)event {
-    NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
-    p.y = NSHeight([self bounds]) - p.y;
-    return p;
+    NSPoint vp = [self convertPoint:[event locationInWindow] fromView:nil];
+    const int cw = gCanvasW_, ch = gCanvasH_;
+    NSRect r = [self canvasRectInView];
+    if (cw <= 0 || ch <= 0 || NSWidth(r) <= 0.0 || NSHeight(r) <= 0.0) {
+        return NSMakePoint(vp.x, NSHeight([self bounds]) - vp.y);
+    }
+    const double s = [self canvasScaleInView];
+    const double cx = (vp.x - NSMinX(r)) / s;
+    const double cy = (NSMaxY(r) - vp.y) / s; /* canvas top-left/y-down */
+    return NSMakePoint(cx, cy);
 }
 
 - (void)pushMouse:(NSEvent *)event down:(BOOL)down {
@@ -388,6 +419,7 @@ static void cursorHookAqua_(int cursorId, void *unused) {
 @end
 
 @implementation AquaWidgetTimer
+
 - (void)tick:(NSTimer *)timer {
     (void) timer;
     /* Each tick must be an autorelease island: on Tiger AppKit does not provide
@@ -441,6 +473,10 @@ int initAquaView_app(int width, int height) {
     gDelegate_ = [[AquaAppDelegate alloc] init];
     [NSApp setDelegate:gDelegate_];
 
+    /* The window is resizable; the shim canvas is a fixed 900x560 and is letterboxed
+       into the resized content view (drawCanvasInto + sdlPoint share the same
+       canvasRectInView transform), so mouse coordinates keep mapping to widgets even
+       when the window is resized. */
     gWin_ = [[AquaWindow alloc]
              initWithContentRect:NSMakeRect(0, 0, width, height)
              styleMask:(NSTitledWindowMask | NSClosableWindowMask |
@@ -451,6 +487,7 @@ int initAquaView_app(int width, int height) {
     [gWin_ setDelegate:gDelegate_];
 
     gView_ = [[[AquaCanvasView alloc] initWithFrame:NSMakeRect(0, 0, width, height)] autorelease];
+    [gView_ setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
     [gWin_ setContentView:gView_];
     [gWin_ makeFirstResponder:gView_];
 

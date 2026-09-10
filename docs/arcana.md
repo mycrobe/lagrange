@@ -369,6 +369,28 @@ by PID (`ps aux | grep L4 | awk '{print $2}'` → `kill -9`) before relaunching.
 `[2026-09-10]`
 *Retro68/68k note: the M-tier Toolbox host has no such pool problem (no NSObject
 autorelease; the Menu Manager is manual), so this is Aqua/T-tier only.*
+
+**Mouse delivery needs `acceptsFirstMouse:` YES (durable, 2026-09-10).** Under a
+nibless `[NSApp run]`+timer window, Tiger swallows the first click on a window that
+is not *key* as an activation click (default `acceptsFirstMouse: NO`); the window's
+key status isn't settled before the user's first click, so every click can be
+consumed and no mouse event reaches the content view (while the menu bar and
+keyboard shortcuts still work, since they don't need the key window). Fix:
+`AquaCanvasView -acceptsFirstMouse:` returns YES. Coordinates must also map view →
+shim canvas; `sdlPoint` and `drawCanvasInto` share a `canvasRectInView`
+letterbox transform so clicks stay correct when the window is resized (before this,
+a resized window ≠ 900x560 → clicks/hover missed widgets).
+**Open blocker (not yet root-caused, 2026-09-10):** even with correct delivery +
+coords, document LINKS don't activate — clicks reach the document as real clicks
+(`isMoved=false`) but `view->hoverLink` stays NULL (activated only when the hovered
+link is set). Instrumentation showed the mouse→document `hoverPos` is offset by the
+banner/`viewPos` (self-test click at canvas centre landed ABOVE the content,
+negative `hoverPos.y`) and mouse-move events appear dropped (the build does not
+define `iPlatformApple`, so the widget kit's motion-accumulation at `app.c` is
+active). The document *does* have links (`visibleLinks` n=2). Suspects to pursue:
+define `iPlatformApple` for the shim build (disables motion accumulation, but watch
+the macOS coupling), or fix the document `documentBounds`/`viewPos` mapping on this
+host. Evidence: `~/classic/petal/logs/l4-aqua-mouse-2026-09-10.txt`.
 **[2026-09-10]**
 NOT `iBigEndian`. Any `#if defined (iBigEndian)` in the_Foundation source is a
 no-op on all builds (the macro is never defined), silently forcing the
