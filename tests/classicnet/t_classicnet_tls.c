@@ -41,6 +41,14 @@ static iBool onTofuVerify(iTlsRequest *req, const iTlsCertificate *cert, int dep
     return iTrue;
 }
 
+/* A verify func that REJECTS the leaf -- stands in for the TOFU pin/mismatch
+   gate (the app's verify_GmCerts_ returns false when the pinned fingerprint does
+   not match the server cert). An openSSL-style mismatch rejects cert. */
+static iBool onRejectVerify(iTlsRequest *req, const iTlsCertificate *cert, int depth) {
+    iUnused(req, cert);
+    return iFalse;
+}
+
 /* Assert a single completed request against the running TLS server. */
 static int runRequest(const char *host, uint16_t port, const char *path, const char *caPath,
                       iBool expectAuthority, const char *tag) {
@@ -268,6 +276,60 @@ done:
     return rc;
 }
 
+/* Assert the TOFU pin/mismatch gate: with the app verify func REJECTING the leaf
+   the handshake aborts, so the request reports status==error, isVerified()==false,
+   and (it is a rejection of the certificate, not a network error) still carries a
+   server certificate the UI can point at. */
+static int runRejectGate(const char *host, uint16_t port, const char *path) {
+    int rc = 1;
+    iTlsRequest *req = new_TlsRequest();
+    iConnect(TlsRequest, req, finished, req, onFinished);
+
+    iString ca;
+    init_String(&ca);
+    setCACertificates_TlsRequest(&ca, &ca); /* no CA -> chain fails -> verify func consulted */
+    deinit_String(&ca);
+
+    iString hostStr;
+    initCStr_String(&hostStr, host);
+    iString reqLine;
+    init_String(&reqLine);
+    appendFormat_String(&reqLine, "gemini://%s%s\r\n", host, path);
+    iBlock content;
+    init_Block(&content, 0);
+    set_Block(&content, &reqLine.chars);
+
+    setHost_TlsRequest(req, &hostStr, port);
+    setContent_TlsRequest(req, &content);
+    submit_TlsRequest(req);
+    waitForFinished_TlsRequest(req);
+
+    const enum iTlsRequestStatus status = status_TlsRequest(req);
+    const iTlsCertificate *cert = serverCertificate_TlsRequest(req);
+    if (status != error_TlsRequestStatus) {
+        printf("[reject] FAIL: expected error status, got %d\n", status);
+        goto done;
+    }
+    if (isVerified_TlsRequest(req)) {
+        printf("[reject] FAIL: rejected cert reported as verified\n");
+        goto done;
+    }
+    if (!cert || isEmpty_TlsCertificate(cert)) {
+        printf("[reject] FAIL: expected the rejected server certificate to be available\n");
+        goto done;
+    }
+    printf("[reject] OK: mismatch gate rejected the cert (status=error, isVerified=0, cert present)\n");
+    rc = 0;
+
+done:
+    deinit_String(&reqLine);
+    deinit_Block(&content);
+    deinit_String(&hostStr);
+    cancel_TlsRequest(req);
+    iRelease(req);
+    return rc;
+}
+
 int main(int argc, char **argv) {
     init_Foundation();
     const char *host   = argc > 1 ? argv[1] : "localhost";
@@ -290,6 +352,13 @@ int main(int argc, char **argv) {
     if (runSelfSigned() != 0) {
         rc = 1;
     }
+    /* Phase 4: TOFU pin/mismatch gate -- the app verify func REJECTS the leaf,
+       so the handshake aborts; the request must error and report !isVerified. */
+    setVerifyFunc_TlsRequest(onRejectVerify);
+    if (runRejectGate(host, port, path) != 0) {
+        rc = 1;
+    }
+    setVerifyFunc_TlsRequest(onTofuVerify);
 
     setVerifyFunc_TlsRequest(NULL);
     deinit_Foundation();

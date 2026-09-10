@@ -408,18 +408,41 @@ lagrange's OS 9 canvas host lands (Phase M):
   `newSelfSignedRSA_TlsCertificate`). Since swapping `tlsrequest.c` out for the
   ClassicNet backend removes all of them, a partial port would leave undefined
   symbols at link time — the mbedTLS replacement must export the full API.
-- **mbedTLS cannot generate certificates** (parse/verify only). `gmcerts` calls
-  `newSelfSignedRSA_TlsCertificate` to mint self-signed test identities, and
-  `newSelfSignedRSA_TlsCertificate` is OpenSSL-only in the stock code. That
-  method needs a fallback/probe (a different generator or a bundled pre-made
-  test keypair) — it cannot be a straight API-for-API mbedTLS port. This
-  interacts with the later Gemini client-cert (P-3) work.
-- **Splitting the port:** the `cn_tls` transport flow can be landed first as a
-  self-contained `iTlsRequest` test (connect → mbedTLS handshake → write content
-  → stream received bytes → `finished`), reusing the `cn_darwin8`+`cn_tls`
-  pump proven by the N1 smoke (`gmclassicnet_smoke.c`); the `iTlsCertificate`
-  X.509-from-mbedTLS wrapper is the bulk of the remaining ~1300 lines.
-  The `-P-3`/`C-3` naming in the plan tracks this (client cert identity).
+- **mbedTLS has no single-call OpenSSL-style cert generator, but it CAN mint a
+  self-signed cert** with `mbedtls_x509write_crt` + `mbedtls_rsa_gen_key`
+  (`MBEDTLS_X509_CRT_WRITE_C`+`MBEDTLS_RSA_C`+`MBEDTLS_GENPRIME`). Gotchas:
+  * `mbedtls_x509write_crt_der` serializes the DER *backwards* into the buffer
+    and returns the length — the cert is at `buf + size - len`, not `buf`.
+    (`sizeof(der)` on a `malloc`'d pointer is the pointer width; use the buffer
+    byte count.) A parse-from-the-wrong-offset fails with
+    `MBEDTLS_ERR_X509_UNKNOWN_VERSION`.
+  * `mbedtls_x509write_crt_set_version(ctx, MBEDTLS_X509_CRT_VERSION_3)` — the
+    constant is `2`, not the literal `3` (that writes an invalid v4/unknown
+    version).
+  * mbedTLS's name parser (`mbedtls_x509_string_to_names`) recognises CN/C/O/L/
+    OU/ST/emailAddress/DC/... but **not** the literal `UID` encountered in
+    lagrange's identity names. Encode UID with its numeric OID plus a DER-hex
+    value: `0.9.2342.19200300.100.1.1=#0c<len><utf8bytes>` (the `#hexDER` value
+    form).
+  * The `d->cert` in the mbedTLS verify callback already owns the offending leaf;
+    a rejection should just set `certVerifyFailed` (a `certificateVerifyFailed`
+    that deletes `d->cert` then `copy_TlsCertificate(same cert)` is a
+    use-after-free — the callback's cert aliases `d->cert`).
+- **The `iTlsCertificate` CA store is a global that must be reset, not appended**
+  — `mbedtls_x509_crt_parse` *appends* to the chain, so calling `setCACertificates`
+  with an empty bundle (TOFU path) must `mbedtls_x509_crt_free`+`init` the store
+  first, or the trust anchor leaks across requests and a no-CA fetch still
+  reports `authority`.
+- **App (GUI) builds must set `-DCN_SANITIZE=OFF`.** ClassicNet compiles its host
+  lib with ASan/UBSan by default (`CN_SANITIZE`, ON when `CN_HOST`), and the
+  ClassicNet test executables carry their own sanitizer link flags — but the
+  plain `canvasapp`/`canvaswin` app targets do not link the sanitizer runtime, so
+  pulling an ASan-instrumented `libclassicnet.a` into them fails at link on
+  `___asan_init`. Only the classicnet *test* build dir (`build-classicnet`) keeps
+  sanitizers on.
+- **Splitting the port:** landed (2a) the `cn_tls` transport + `iTlsCertificate`
+  X.509 wrapper, then (2b) the self-signed generator above. The `-P-3`/`C-3`
+  naming in the plan tracks the client-cert identity work.
 
 ## Dead ends (proven — do not retry) **[starscape]**
 

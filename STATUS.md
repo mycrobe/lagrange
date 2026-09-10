@@ -3,8 +3,9 @@
 ## Where we are
 
 **Phase 1 — ClassicNet network seam (host-first); N1 done, N2 step 1 (Socket)
-done, N2 step 2 (TlsRequest) done incl. self-signed generation (2b); TLS session
-cache (non-blocking) + N3 next.**
+done, N2 step 2 (TlsRequest) done incl. self-signed generation (2b), N3 wiring
+done (canvas build + headless fetch render); remaining (2b) session cache
+(non-blocking) + N3 tactile/QEMU page confirmation + ClassicNet pin.**
 Phase order is **1) ClassicNet on the host → 2) Tiger/Cocoa → 3) Classic**,
 with the cross-build tool systems as parallel enabling work. The seam reuses
 the "escape SDL" pattern for networking: keep `gmrequest.c`/`gmcerts` untouched
@@ -111,10 +112,26 @@ Evidence / reproduce:
      (`setSessionCacheEnabled_TlsRequest` is a no-op over `cn_tls`);
      `saveSession_Context_`/`CachedSession` are OpenSSL-only and were not carried
      over, so each request re-negotiates a session instead of reusing one.
-2. **N3 — into the canvas app.** Wire the seam into `canvaswin` so the viewer
-   actually fetches a Gemini page over ClassicNet. Gate: integration test
-   fetches a real Gemini URL asserting status/meta/body + the TOFU
-   pin/mismatch gate; `canvaswin` shows the page.
+2. **N3 — seam into the canvas app: wiring done, tactile page confirmation
+   pending.** The canvas app now builds with the seam:
+   `cmake -S . -B build-canvas-classicnet -DENABLE_CANVAS=ON -DENABLE_CLASSICNET=ON ...`
+   → `canvasapp` (headless) and `canvaswin` (windowed) both link the ClassicNet
+   the_Foundation (the app's portable `gmrequest`/`gmcerts` use
+   `new_TlsRequest`/`new_Socket` unchanged, which route to ClassicNet). A headless
+   run of `canvasapp` against a local TLS Gemini server (SDL dummy driver,
+   isolated `CANVAS_PREF_DIR`, TOFU trust pre-seeded in `trusted.2.txt`) renders a
+   900x560 page frame with no cert/trust error, and the seam-level fetch gate now
+   covers CA-verify + TOFU-accept + TOFU **mismatch/reject** in
+   `tests/classicnet/t_classicnet_tls.c` (`[ca] [tofu] [selfgen] [reject]` all OK).
+   * Build gotcha (see `docs/arcana.md`): an app build (GUI) must set
+     `-DCN_SANITIZE=OFF` — ClassicNet compiles its lib with ASan by default
+     (`CN_SANITIZE`), but the app targets aren't linked with the sanitizer
+     runtime, so linking ASan-instrumented `libclassicnet.a` into `canvaswin`
+     fails on `___asan_init` otherwise.
+   * Remaining N3 gate: the *visual* confirmation that `canvaswin` shows the
+     fetched page and the TOFU trust/mismatch *UI* prompt — the tactile/QEMU/
+     real-hardware check (the fetch itself is proven at the seam level and by the
+     headless frame render).
 3. ClassicNet submodule pin: lagrange is at `8e0df7a` (6-arg `CN_TlsCreate`).
    When the client-cert identity commit (`57ca5db`) lands on `origin`, bump the
    pin and migrate to the 10-arg form as part of the Gemini auth work.
