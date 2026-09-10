@@ -47,48 +47,45 @@ rule, AGENTS.md). Canvas builds use an isolated state dir
 
 ## Last completed milestone
 
-**N1 — ClassicNet host wiring** (this session, 2026-09-09). Vendored
-`vendor/ClassicNet` as a git submodule pinned to `8e0df7a`
-(`origin/darwin8-transport`), provisioned host mbedTLS 3.6 into
-`vendor/ClassicNet/deps/mbedtls-host3` via `scripts/setup-classicnet.sh`, and
-wired the host slice into the lagrange build behind `-DENABLE_CLASSICNET=ON`
-(`cmake/ClassicNet.cmake` + option in `CMakeLists.txt`). Added a real Gemini
-host smoke (`tests/classicnet/gmclassicnet_smoke.c`) that drives
-`cn_darwin8`+`cn_tls` directly through the `CNTransport` vtable and asserts a
-2x status + non-empty body, plus a local TLS Gemini server
-(`tests/classicnet/gemini_tls_server.py`) and the gate runner
-(`scripts/test-classicnet-n1.sh`).
+**N2 step 1 — ClassicNet-backed `iSocket`** (this session, 2026-09-09). The
+`the_Foundation` submodule now has a `classicnet-seam` branch with a
+`CNTransport` backend for `iSocket`: a `Stream` subclass whose I/O is driven by
+a ClassicNet transport (`cn_darwin8` host/Tiger, `cn_ot` OS 8/9) instead of a
+raw fd + `select()`, selected by `TFDN_CLASSICNET=ON`. Connected/readyRead/
+error/disconnected/bytesWritten/writeFinished audiences fire from the pump.
+lagrange wires the seam: `Depends.cmake` turns on `TFDN_CLASSICNET` when
+`ENABLE_CLASSICNET`, `ClassicNet.cmake` PUBLIC-links `the_Foundation` to
+`classicnet` (which supplies the `CN_HOST`/`CN_WITH_DARWIN8` usage requirements
+and include dir), and a loopback unit test + echo TCP server
+(`tests/classicnet/t_classicnet_socket.c`, `socket_echo_server.py`,
+`scripts/test-classicnet-socket.sh`) validates the audiences and byte framing.
 
 Evidence / reproduce:
-- ClassicNet 13/13 (ASan), vendored submodule:
-  `scripts/setup-classicnet.sh` then, inside `vendor/ClassicNet`,
-  `cmake -S . -B build-host-tls3 -DCN_WITH_MBEDTLS=ON -DMBEDTLS_ROOT=deps/mbedtls-host3 && cmake --build build-host-tls3 -j8 && ctest --test-dir build-host-tls3` → `100% tests passed out of 13`.
-- Smoke fetch, verified:
-  `cmake -S . -B build-classicnet -DENABLE_CLASSICNET=ON -DENABLE_GUI=OFF -DENABLE_HARFBUZZ=OFF -DENABLE_FRIBIDI=OFF` then
-  `cmake --build build-classicnet --target gmclassicnet_smoke -j8` then
-  `scripts/test-classicnet-n1.sh ./build-classicnet/gmclassicnet_smoke`
-  → `OK: ClassicNet host slice 13/13 (ASan)` + `OK: Gemini status '20' head '20 text/gemini' -> 66 body bytes` + `OK: Gemini smoke fetch -> 2x status + non-empty body`.
-- One-shot via ctest: `ctest --test-dir build-classicnet --output-on-failure`
-  → `Test #1: classicnet_n1 ... Passed`.
-- Regression gate: `cmake --build build-host --target app -j8` and
-  `cmake --build build-canvas --target canvasapp -j8` both stay green.
+- `cmake -S . -B build-classicnet -DENABLE_CLASSICNET=ON -DENABLE_GUI=OFF -DENABLE_HARFBUZZ=OFF -DENABLE_FRIBIDI=OFF`
+  then `cmake --build build-classicnet --target t_classicnet_socket -j8` then
+  `scripts/test-classicnet-socket.sh ./build-classicnet/t_classicnet_socket`
+  → `OK: connected=1 readyRead=1 disconnected=1 error=0 -> 'echo: hello'` (exit 0),
+  binary links `libclang_rt.asan_osx_dynamic.dylib`.
+- One-shot via ctest: `ctest --test-dir build-classicnet -R classicnet_socket --output-on-failure`.
+- Regression gates stay green: stock `app` (build-host) and `canvasapp`
+  (build-canvas) rebuild clean.
+- `the_Foundation` pin bumped to `f30fdd8` (`classicnet-seam` branch).
 
 ## In-flight
 
-1. **N2 — the seam** (next). Implement the `Socket`/`TlsRequest` backends over
-   `CNTransport` in `the_Foundation`: a `Stream` subclass whose I/O drives a
-   `CNTransport` and fires the `connected`/`readyRead`/`error`/`disconnected`
-   audiences; a `TlsRequest` backend wrapping `cn_tls` (mbedTLS,
-   `CN_TLS_FORCE_TLS12=1`) mapping `submit`/`readAll`/`serverCertificate`/
-   `isVerified`/`setVerifyFunc` to mbedTLS + `gmcerts`. Branch inside the
-   `the_Foundation` submodule (named branch, host-tested, pin bumped in the
-   consuming commit). **Gate:** host unit tests of both backends against
-   ClassicNet's loopback `CNTransport` (framing + audiences + cert-verify →
-   `gmcerts`), ASan/UBSan clean; `build-host` stock `app` still green.
+1. **N2 step 2 — `TlsRequest` backend** (next). Reimplement `iTlsRequest` over
+   `cn_tls` (mbedTLS, `CN_TLS_FORCE_TLS12=1`): map `submit`/`readAll`/
+   `serverCertificate`/`isVerified`/`setVerifyFunc` and the `readyRead`/`sent`/
+   `finished` audiences to mbedTLS + `gmcerts`. This is the larger slice —
+   `tlsrequest.c` is ~1300 lines including the `iTlsCertificate` X.509 wrapper
+   (subject/issuer/alt-names, fingerprints, verify/expiry, domain match) that
+   must map to mbedTLS + `gmcerts`. Branch stays in the `classicnet-seam`
+   submodule branch. **Gate:** host unit test of the TlsRequest backend against
+   a local TLS server, ASan/UBSan clean; `build-host` stock `app` still green.
 2. **N3 — into the canvas app.** Wire the seam into `canvaswin` so the viewer
    actually fetches a Gemini page over ClassicNet. Gate: integration test
    fetches a real Gemini URL asserting status/meta/body + the TOFU
    pin/mismatch gate; `canvaswin` shows the page.
 3. ClassicNet submodule pin: lagrange is at `8e0df7a` (6-arg `CN_TlsCreate`).
    When the client-cert identity commit (`57ca5db`) lands on `origin`, bump the
-   pin and migrate the call to the 10-arg form as part of the Gemini auth work.
+   pin and migrate to the 10-arg form as part of the Gemini auth work.

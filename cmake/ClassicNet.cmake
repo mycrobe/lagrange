@@ -55,6 +55,15 @@ if (TARGET classicnet)
     target_compile_definitions (classicnet PRIVATE CN_TLS_FORCE_TLS12=1)
 endif ()
 
+# The the_Foundation Seam (TFDN_CLASSICNET) compiles socket.c/tlsrequest.c to
+# drive a ClassicNet CNTransport; attach the classicnet static lib + its PUBLIC
+# usage requirements (CN_HOST/CN_WITH_DARWIN8 defines, include dir) so the_Foundation's
+# classicnet sources compile. Done here because the classicnet target is defined by
+# add_subdirectory above.
+if (TARGET the_Foundation AND TARGET classicnet)
+    target_link_libraries (the_Foundation PUBLIC classicnet)
+endif ()
+
 # N1 host smoke: a real Gemini fetch over cn_darwin8 + cn_tls. Driven by
 # scripts/test-classicnet-n1.sh against a local TLS Gemini test server.
 add_executable (gmclassicnet_smoke tests/classicnet/gmclassicnet_smoke.c)
@@ -70,7 +79,22 @@ if (CN_HOST)
         -fsanitize=address,undefined)
 endif ()
 
+# N2 host unit test: the ClassicNet-backed iSocket. Links the_Foundation (now
+# built with the classicnet socket backend via TFDN_CLASSICNET) + classicnet.
+add_executable (t_classicnet_socket tests/classicnet/t_classicnet_socket.c)
+set_property (TARGET t_classicnet_socket PROPERTY C_STANDARD 11)
+target_link_libraries (t_classicnet_socket PRIVATE the_Foundation::the_Foundation)
+if (CN_HOST)
+    target_compile_options (t_classicnet_socket PRIVATE
+        -fsanitize=address,undefined -fno-omit-frame-pointer -g)
+    target_link_options (t_classicnet_socket PRIVATE
+        -fsanitize=address,undefined)
+endif ()
+
 enable_testing ()
 add_test (NAME classicnet_n1
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-classicnet-n1.sh"
             "$<TARGET_FILE:gmclassicnet_smoke>")
+add_test (NAME classicnet_socket
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-classicnet-socket.sh"
+            "$<TARGET_FILE:t_classicnet_socket>")

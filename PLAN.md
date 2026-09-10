@@ -114,11 +114,19 @@ Milestones (host-verifiable; **each gates on its test before the next**):
   (`57ca5db`, 10-arg client-cert `CN_TlsCreate`); lagrange pins the public
   `origin/darwin8-transport` tip `8e0df7a` (6-arg `CN_TlsCreate`) — client-cert
   identity is the Gemini auth milestone.
-- **N2 — the seam.** Implement the `Socket`/`TlsRequest` backends over
-  `CNTransport` (the bulk of the code; iteration-heavy).
-  **Test gate:** host unit tests of both backends against ClassicNet's
-  loopback `CNTransport` (framing + audiences + cert-verify → `gmcerts`),
-  ASan/UBSan clean; `build-host` stock `app` still green.
+- **N2 — the seam (in progress).** Implement the `Socket`/`TlsRequest`
+  backends over `CNTransport` (the bulk of the code; iteration-heavy).
+  *Step 1 DONE (2026-09-09):* the `Socket` backend — a `Stream` subclass over
+  a `CNTransport` (`cn_darwin8` host/Tiger, `cn_ot` Classic) firing
+  `connected`/`readyRead`/`error`/`disconnected`/`bytesWritten`/`writeFinished`,
+  selected by `TFDN_CLASSICNET=ON` in the `the_Foundation` submodule
+  (`classicnet-seam` branch, pin `f30fdd8`). lagrange wires the flag + links
+  `the_Foundation` to `classicnet`; host unit test against a loopback TCP echo
+  server is ASan-clean. *Step 2 remains:* the `TlsRequest` backend over `cn_tls`
+  (mbedTLS) + the `iTlsCertificate` X.509 wrapper → `gmcerts`.
+  **Test gate:** host unit tests of the backends against ClassicNet's loopback
+  `CNTransport` (framing + audiences + cert-verify → `gmcerts`), ASan/UBSan clean;
+  `build-host` stock `app` still green.
 - **N3 — into the canvas app.** Wire the seam into `canvaswin` so the
   viewer actually fetches a Gemini page over ClassicNet.
   **Test gate:** integration test fetches a real Gemini URL, asserting
