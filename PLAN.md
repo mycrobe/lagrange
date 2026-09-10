@@ -150,6 +150,12 @@ Milestones (host-verifiable; **each gates on its test before the next**):
   10.4u SDK pipeline, docker-wrapped, CMake-driven via `scripts/build-osx.sh`
   pattern). Carry over: `-Wl,-force_cpusubtype_ALL` on every link line
   (ppc_970 emutls trap), configure-time 64-bit-division link probe.
+  ✅ **STANDING (2026-09-09)**: `osx/darwin8.toolchain.cmake` +
+  `osx/CMakeLists.txt` + `scripts/build-osx.sh` build the ClassicNet
+  darwin8 slice (`cn_d8`) + mbedTLS-d8 into `build-osx/d8_smoke` (a PPC
+  Mach-O), verified on petal (Tiger 10.4.11) with a real Gemini fetch over
+  `cn_darwin8` + `cn_tls`. See STATUS.md. Next: cross-build `the_Foundation`
+  (+ the seam) and the Aqua canvas host.
 - Cross-build vendored deps per tier: mbedTLS (`mbedtls-darwin8` from
   Starscape; an `mbedtls-ppc` Retro68 build), freetype unnecessary (STB
   text rendering is self-contained; keep `text_stb`).
