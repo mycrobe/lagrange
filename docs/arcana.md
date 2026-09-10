@@ -250,6 +250,13 @@ lagrange's OS 9 canvas host lands (Phase M):
 
 ## Loop / evidence (inherited discipline)
 
+- **See ClassicNet live: `[classicnet]` stderr markers.** ClassicNet logs one
+  line per transport to stderr — `[classicnet] TCP connect <host>:<port>
+  (cn_darwin8)` and `[classicnet] TLS handshake OK (mbedTLS via cn_tls)`. This
+  is the fastest ground-truth that a fetch went through the seam rather than
+  stock OpenSSL/posix: run the binary and watch. (Confirmed against `canvaswin`
+  over the seam: localhost + an external `gemini://gemini.circumlunar.space:1965`
+  fetch both logged the markers. The isolated-run log is `/tmp/kilo/cn.log`.)
 - Bundle diagnostics into ONE console app per QEMU boot: boot-to-evidence
   ≈ 75 s; one hypothesis per build would be the time sync of the project. **[starscape]**
 - Headless output is invisible: the screenshot (or a mirrored log file)

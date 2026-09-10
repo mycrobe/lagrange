@@ -128,10 +128,18 @@ Evidence / reproduce:
      (`CN_SANITIZE`), but the app targets aren't linked with the sanitizer
      runtime, so linking ASan-instrumented `libclassicnet.a` into `canvaswin`
      fails on `___asan_init` otherwise.
+   * Tip for eyeballing the seam live: ClassicNet now logs one line to stderr per
+     transport (`[classicnet] TCP connect <host>:<port> (cn_darwin8)` and
+     `[classicnet] TLS handshake OK (mbedTLS via cn_tls)`) — run any lagrange or
+     canvas build over the seam and watch them appear as you browse (the app log
+     is `/tmp/kilo/cn.log` in the isolated state-dir runs). Closes the "is it
+     really using ClassicNet?" question with a visible, per-fetch marker.
    * Remaining N3 gate: the *visual* confirmation that `canvaswin` shows the
      fetched page and the TOFU trust/mismatch *UI* prompt — the tactile/QEMU/
      real-hardware check (the fetch itself is proven at the seam level and by the
      headless frame render).
-3. ClassicNet submodule pin: lagrange is at `8e0df7a` (6-arg `CN_TlsCreate`).
-   When the client-cert identity commit (`57ca5db`) lands on `origin`, bump the
-   pin and migrate to the 10-arg form as part of the Gemini auth work.
+3. ClassicNet submodule pin: lagrange is at `f1dbf66` (a local
+   `darwin8-transport` commit on top of `8e0df7a` that adds the `[classicnet]`
+   stderr markers — must be pushed for a clean clone). The 6-arg `CN_TlsCreate`
+   stays until the client-cert identity commit (`57ca5db`) lands on `origin`,
+   then bump and migrate to the 10-arg form as part of the Gemini auth work.
