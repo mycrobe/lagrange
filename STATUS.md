@@ -3,8 +3,8 @@
 ## Where we are
 
 **Phase 1 — ClassicNet network seam (host-first); N1 done, N2 step 1 (Socket)
-done, N2 step 2 (TlsRequest) done, (2b) self-signed generation + session cache
-remain, N3 next.**
+done, N2 step 2 (TlsRequest) done incl. self-signed generation (2b); TLS session
+cache (non-blocking) + N3 next.**
 Phase order is **1) ClassicNet on the host → 2) Tiger/Cocoa → 3) Classic**,
 with the cross-build tool systems as parallel enabling work. The seam reuses
 the "escape SDL" pattern for networking: keep `gmrequest.c`/`gmcerts` untouched
@@ -95,18 +95,22 @@ Evidence / reproduce:
 
 ## In-flight
 
-1. **(2b) — the remaining `iTlsCertificate` bits.** Two items:
-   * `newSelfSignedRSA_TlsCertificate`: mbedTLS has no certificate *generation*
-     (self-signed test identities used by `newIdentity_GmCerts`). Needs a
-     fallback/probe (cf. the P-3 client-auth/cert work) — currently stubbed to
-     an empty cert, so `newIdentity_GmCerts` produces an invalid identity until
-     this lands.
-   * TLS session cache (`setSessionCacheEnabled_TlsRequest` is a no-op over
-     `cn_tls`); `saveSession_Context_`/`CachedSession` are OpenSSL-only and were
-     not carried over. Non-blocking for correctness, it only re-negotiates per
-     request instead of reusing a session.
-   Combine into the `classicnet-seam` submodule branch; host-test a
-   server-cert + identity round-trip.
+1. **(2b) — is complete except the TLS session cache.** The self-signed
+   certificate *generation* is now implemented over mbedTLS (the X.509 write
+   module + RSA keygen), so `newIdentity_GmCerts` produces a real self-signed
+   identity cert instead of an empty stub: it generates an RSA keypair, builds
+   subject/issuer names from the `iTlsCertificateName` array (CN, emailAddress,
+   domain-as-DC, OU, O, C; UID via the numeric-OID DER-hex form since mbedTLS's
+   parser has no "UID" short name), sets a validity window, signs SHA-256 with
+   `mbedtls_x509write_crt_der` (writes the DER backwards — parse from
+   `buf+size-len`), and re-parses it into an `iTlsCertificate` with the private
+   key attached. Host-verified (`[selfgen] OK` in the TLS test). RNG is
+   `mbedtls_entropy_func` (on Classic the platform RNG must be supplied — the
+   documented ClassicNet hard problem).
+   * Remaining (non-blocking, correctness-neutral): the TLS *session cache*
+     (`setSessionCacheEnabled_TlsRequest` is a no-op over `cn_tls`);
+     `saveSession_Context_`/`CachedSession` are OpenSSL-only and were not carried
+     over, so each request re-negotiates a session instead of reusing one.
 2. **N3 — into the canvas app.** Wire the seam into `canvaswin` so the viewer
    actually fetches a Gemini page over ClassicNet. Gate: integration test
    fetches a real Gemini URL asserting status/meta/body + the TOFU

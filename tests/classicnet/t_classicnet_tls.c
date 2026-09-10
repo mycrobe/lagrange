@@ -171,6 +171,103 @@ done:
     return rc;
 }
 
+/* Assert the (2b) self-signed certificate generation actually produces a usable
+   cert (not the empty stub): non-empty, has a private key, correct subject CN,
+   not expired, self-signed verification status, non-empty PEM + fingerprints. */
+static int runSelfSigned(void) {
+    int rc = 1;
+    iString cn, uid, email, domain, org, country;
+    initCStr_String(&cn, "Alice");
+    initCStr_String(&uid, "alice");
+    initCStr_String(&email, "alice@example.com");
+    initCStr_String(&domain, "example.com");
+    initCStr_String(&org, "Example Org");
+    initCStr_String(&country, "US");
+
+    const iTlsCertificateName names[] = {
+        { issuerCommonName_TlsCertificateNameType,    &cn },
+        { issuerEmailAddress_TlsCertificateNameType,  &email },
+        { issuerUserId_TlsCertificateNameType,        &uid },
+        { issuerDomain_TlsCertificateNameType,        &domain },
+        { issuerOrganization_TlsCertificateNameType,  &org },
+        { issuerCountry_TlsCertificateNameType,       &country },
+        { subjectCommonName_TlsCertificateNameType,   &cn },
+        { subjectEmailAddress_TlsCertificateNameType, &email },
+        { subjectUserId_TlsCertificateNameType,       &uid },
+        { subjectDomain_TlsCertificateNameType,       &domain },
+        { subjectOrganization_TlsCertificateNameType, &org },
+        { subjectCountry_TlsCertificateNameType,      &country },
+        { 0, NULL }
+    };
+
+    iDate until;
+    initCurrent_Date(&until);
+    until.year += 1; /* one year from now */
+
+    iTlsCertificate *cert = newSelfSignedRSA_TlsCertificate(2048, until, names);
+    if (!cert || isEmpty_TlsCertificate(cert)) {
+        printf("[selfgen] FAIL: empty certificate\n");
+        goto done;
+    }
+    if (!hasPrivateKey_TlsCertificate(cert)) {
+        printf("[selfgen] FAIL: no private key\n");
+        delete_TlsCertificate(cert);
+        goto done;
+    }
+
+    iString *subject = subject_TlsCertificate(cert);
+    if (isEmpty_String(subject) || !startsWith_String(subject, "CN = ")) {
+        printf("[selfgen] FAIL: bad subject '%s'\n", cstr_String(subject));
+        delete_String(subject);
+        delete_TlsCertificate(cert);
+        goto done;
+    }
+    delete_String(subject);
+
+    if (isExpired_TlsCertificate(cert)) {
+        printf("[selfgen] FAIL: certificate expired\n");
+        delete_TlsCertificate(cert);
+        goto done;
+    }
+    if (verify_TlsCertificate(cert) != selfSigned_TlsCertificateVerifyStatus) {
+        printf("[selfgen] FAIL: expected self-signed (got %d)\n", verify_TlsCertificate(cert));
+        delete_TlsCertificate(cert);
+        goto done;
+    }
+
+    iBlock *fp = fingerprint_TlsCertificate(cert);
+    iBlock *pkey = privateKeyFingerprint_TlsCertificate(cert);
+    iString *pem = pem_TlsCertificate(cert);
+    iString *keyPem = privateKeyPem_TlsCertificate(cert);
+    if (size_Block(fp) == 0 || size_Block(pkey) == 0 ||
+        isEmpty_String(pem) || isEmpty_String(keyPem)) {
+        printf("[selfgen] FAIL: missing pem/fingerprint\n");
+        delete_Block(fp);
+        delete_Block(pkey);
+        delete_String(pem);
+        delete_String(keyPem);
+        delete_TlsCertificate(cert);
+        goto done;
+    }
+    delete_Block(fp);
+    delete_Block(pkey);
+    delete_String(pem);
+    delete_String(keyPem);
+
+    printf("[selfgen] OK: self-signed cert generated (subject CN, key present, not expired)\n");
+    delete_TlsCertificate(cert);
+    rc = 0;
+
+done:
+    deinit_String(&cn);
+    deinit_String(&uid);
+    deinit_String(&email);
+    deinit_String(&domain);
+    deinit_String(&org);
+    deinit_String(&country);
+    return rc;
+}
+
 int main(int argc, char **argv) {
     init_Foundation();
     const char *host   = argc > 1 ? argv[1] : "localhost";
@@ -187,6 +284,10 @@ int main(int argc, char **argv) {
     }
     /* Phase 2: TOFU path -- no CA bundle, verify func accepts the leaf. */
     if (runRequest(host, port, path, NULL, iFalse, "tofu") != 0) {
+        rc = 1;
+    }
+    /* Phase 3: (2b) self-signed certificate generation over mbedTLS. */
+    if (runSelfSigned() != 0) {
         rc = 1;
     }
 
