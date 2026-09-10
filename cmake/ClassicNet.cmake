@@ -91,6 +91,19 @@ if (CN_HOST)
         -fsanitize=address,undefined)
 endif ()
 
+# N2 step-2 host integration test: the ClassicNet-backed iTlsRequest + iTlsCertificate
+# (TLS over cn_tls/mbedTLS). Exercises the CA-verified path and the TOFU path against
+# a local TLS Gemini server; links the_Foundation (classicnet tlsrequest backend).
+add_executable (t_classicnet_tls tests/classicnet/t_classicnet_tls.c)
+set_property (TARGET t_classicnet_tls PROPERTY C_STANDARD 11)
+target_link_libraries (t_classicnet_tls PRIVATE the_Foundation::the_Foundation)
+if (CN_HOST)
+    target_compile_options (t_classicnet_tls PRIVATE
+        -fsanitize=address,undefined -fno-omit-frame-pointer -g)
+    target_link_options (t_classicnet_tls PRIVATE
+        -fsanitize=address,undefined)
+endif ()
+
 enable_testing ()
 add_test (NAME classicnet_n1
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-classicnet-n1.sh"
@@ -98,3 +111,6 @@ add_test (NAME classicnet_n1
 add_test (NAME classicnet_socket
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-classicnet-socket.sh"
             "$<TARGET_FILE:t_classicnet_socket>")
+add_test (NAME classicnet_tls
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-classicnet-tls.sh"
+            "$<TARGET_FILE:t_classicnet_tls>")

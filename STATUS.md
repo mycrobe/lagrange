@@ -3,7 +3,8 @@
 ## Where we are
 
 **Phase 1 — ClassicNet network seam (host-first); N1 done, N2 step 1 (Socket)
-done, N2 step 2 (TlsRequest) next.**
+done, N2 step 2 (TlsRequest) done, (2b) self-signed generation + session cache
+remain, N3 next.**
 Phase order is **1) ClassicNet on the host → 2) Tiger/Cocoa → 3) Classic**,
 with the cross-build tool systems as parallel enabling work. The seam reuses
 the "escape SDL" pattern for networking: keep `gmrequest.c`/`gmcerts` untouched
@@ -12,14 +13,15 @@ and reimplement the_Foundation's `iSocket`/`iTlsRequest` over ClassicNet's
 mbedTLS, `CN_TLS_FORCE_TLS12=1`) behind the identical public API, with a
 `LAGRANGE_CLASSICNET` compile-time switch.
 
-**Seam state:** `the_Foundation` (`classicnet-seam` branch, pin `f30fdd8`) has
-the ClassicNet-backed `iSocket` (N2 step 1, host-tested under ASan); `iSocket`
-I/O is selected by `TFDN_CLASSICNET=ON`, which lagrange sets when
-`ENABLE_CLASSICNET=ON`. The `iTlsRequest` backend is NOT yet done (N2 step 2).
-⚠️ **`the_Foundation`'s `classicnet-seam` branch is LOCAL-ONLY (never pushed)** —
-the lagrange pin `f30fdd8` references a local commit, so a fresh clone cannot
-reproduce it. Push the branch (and keep the pin in sync) before relying on a
-clean checkout, or the seam has nothing to pin to.
+**Seam state:** `the_Foundation` (`classicnet-seam` branch, pin `f30fdd8`; the
+branch IS now pushed to `origin/classicnet-seam` — the local-only caveat from
+before is resolved, but the step-2 commit is still uncommitted in the submodule
+working tree and must be committed + pinned before a clean checkout) has both
+ClassicNet backends: the `iSocket` (N2 step 1) and the `iTlsRequest` +
+`iTlsCertificate` over `cn_tls`/mbedTLS (N2 step 2, host-tested under ASan).
+Both I/O paths are selected by `TFDN_CLASSICNET=ON`, which lagrange sets when
+`ENABLE_CLASSICNET=ON`; otherwise the stock OpenSSL `src/tlsrequest.c` and
+`posix/socket.c` are used.
 
 **N1 (host wiring) is complete and gated on the host this session (2026-09-09):**
 ClassicNet is vendored as a git submodule at `vendor/ClassicNet` (pinned to the
@@ -57,57 +59,54 @@ rule, AGENTS.md). Canvas builds use an isolated state dir
 
 ## Last completed milestone
 
-**N2 step 1 — ClassicNet-backed `iSocket`** (this session, 2026-09-09). The
-`the_Foundation` submodule now has a `classicnet-seam` branch with a
-`CNTransport` backend for `iSocket`: a `Stream` subclass whose I/O is driven by
-a ClassicNet transport (`cn_darwin8` host/Tiger, `cn_ot` OS 8/9) instead of a
-raw fd + `select()`, selected by `TFDN_CLASSICNET=ON`. Connected/readyRead/
-error/disconnected/bytesWritten/writeFinished audiences fire from the pump.
-lagrange wires the seam: `Depends.cmake` turns on `TFDN_CLASSICNET` when
-`ENABLE_CLASSICNET`, `ClassicNet.cmake` PUBLIC-links `the_Foundation` to
-`classicnet` (which supplies the `CN_HOST`/`CN_WITH_DARWIN8` usage requirements
-and include dir), and a loopback unit test + echo TCP server
-(`tests/classicnet/t_classicnet_socket.c`, `socket_echo_server.py`,
-`scripts/test-classicnet-socket.sh`) validates the audiences and byte framing.
+**N2 step 2 — ClassicNet-backed `iTlsRequest` + `iTlsCertificate` over `cn_tls`
+(mbedTLS)** (this session, 2026-09-09). A new
+`the_Foundation` classicnet backend (`src/platform/classicnet/tlsrequest.c`,
+selected by `TFDN_CLASSICNET`) reimplements the full `tlsrequest.c` public API
+(`iTlsCertificate` + `iTlsRequest`) over mbedTLS via ClassicNet's `cn_tls`:
+the request wraps a `cn_darwin8` socket in `CNTlsTransport`, drives the
+non-blocking TLS handshake on a single worker thread, streams the plaintext
+request (firing `sent`) and decrypted response (firing `readyRead`), and ends
+with `finished`; the server certificate is captured from the handshake and
+served via `serverCertificate_TlsRequest()`. The TOFU gate is enforced with an
+mbedTLS verify callback that consults the app's `iTlsRequestVerifyFunc` for the
+leaf (a cert mbedTLS verifies via CA/hostname is accepted without the callback;
+a failed cert defers to the app, and a rejection aborts the handshake and marks
+`isVerified()==false`). `iTlsCertificate` is fully implemented over mbedTLS:
+parse/verify/expiry/`pem`/fingerprints/domain+IP+wildcard match/alt-names/
+subject+issuer (formatted OpenSSL-ONELINE style, matching what `gmcerts`'
+`misfinIdentity`/`name_GmIdentity` parse)/copy/equal/hasPrivateKey/keys.
+`newSelfSignedRSA_TlsCertificate` (mbedTLS cannot *generate* certs) is stubbed
+to return an empty cert with a warning — that is the remaining (2b) workaround.
 
 Evidence / reproduce:
 - `cmake -S . -B build-classicnet -DENABLE_CLASSICNET=ON -DENABLE_GUI=OFF -DENABLE_HARFBUZZ=OFF -DENABLE_FRIBIDI=OFF`
-  then `cmake --build build-classicnet --target t_classicnet_socket -j8` then
-  `scripts/test-classicnet-socket.sh ./build-classicnet/t_classicnet_socket`
-  → `OK: connected=1 readyRead=1 disconnected=1 error=0 -> 'echo: hello'` (exit 0),
-  binary links `libclang_rt.asan_osx_dynamic.dylib`.
-- One-shot via ctest: `ctest --test-dir build-classicnet -R classicnet_socket --output-on-failure`.
+  then `cmake --build build-classicnet --target t_classicnet_tls -j8` then
+  `scripts/test-classicnet-tls.sh ./build-classicnet/t_classicnet_tls`
+  → `[ca] OK ... verifystatus=2 isVerified=1` and `[tofu] OK ... verifystatus=0 isVerified=1`
+  (CA-verified fetch + TOFU-accepted fetch), exit 0.
+- One-shot via ctest: `ctest --test-dir build-classicnet -R classicnet_tls --output-on-failure`.
+- Full classicnet gate: `ctest --test-dir build-classicnet -R 'classicnet_'`
+  → n1 (ClassicNet 13/13 + smoke), socket, tls all pass.
 - Regression gates stay green: stock `app` (build-host) and `canvasapp`
   (build-canvas) rebuild clean.
-- `the_Foundation` pin bumped to `f30fdd8` (`classicnet-seam` branch).
+- `the_Foundation` seam work is uncommitted in the submodule (step 1 + step 2);
+  commit and bump the pin before a clean checkout.
 
 ## In-flight
 
-1. **N2 step 2 — `TlsRequest` backend** (next; large, monolithic). Reimplement
-   `iTlsRequest` over `cn_tls` (mbedTLS, `CN_TLS_FORCE_TLS12=1`): map `submit`/
-   `readAll`/`serverCertificate`/`isVerified`/`setVerifyFunc` and the `readyRead`/
-   `sent`/`finished` audiences to mbedTLS + `gmcerts`. **Two hard constraints:**
-   - *Monolithic symbol set.* `the_Foundation/src/tlsrequest.c` is one file
-     providing **both** `iTlsCertificate` and `iTlsRequest`; `gmcerts.c` uses
-     nearly every `iTlsCertificate` method (subject/issuer name components,
-     alt-names, fingerprints, `verify`/`verifyDomain`, `validUntil`/`isExpired`,
-     `pem`, `equal`, `newSelfSignedRSA_TlsCertificate`). A partial port leaves
-     undefined symbols once `tlsrequest.c` is swapped out, so the mbedTLS
-     replacement must export the full API in one go (~1300+ lines).
-   - *mbedTLS cannot generate certificates.* `gmcerts.c` calls
-     `newSelfSignedRSA_TlsCertificate` (self-signed test identities) — an OpenSSL
-     capability; mbedTLS only parses/verifies. That method needs a fallback/probe
-     (cf. the P-3 client-auth/cert work), so a straight API-for-API port is
-     impossible.
-   **Sub-sequencing:** *(2a)* the `iTlsRequest` transport over `cn_tls` (connect →
-   handshake → write content → stream response → `sent`/`readyRead`/`finished`,
-   `status`/`isVerified`/`serverCertificate`) + the `iTlsCertificate` core over
-   mbedTLS (parse/verify/expiry/`pem`/fingerprint/`verifyDomain`), host-tested
-   against a local TLS server with the pinned test CA; *(2b)* the remaining
-   `iTlsCertificate` name-component extraction + the self-signed-generation
-   workaround. **Gate:** host unit test of the TlsRequest backend against a local
-   TLS server, ASan/UBSan clean; `build-host` stock `app` still green.
-   Branch stays in the `classicnet-seam` submodule branch.
+1. **(2b) — the remaining `iTlsCertificate` bits.** Two items:
+   * `newSelfSignedRSA_TlsCertificate`: mbedTLS has no certificate *generation*
+     (self-signed test identities used by `newIdentity_GmCerts`). Needs a
+     fallback/probe (cf. the P-3 client-auth/cert work) — currently stubbed to
+     an empty cert, so `newIdentity_GmCerts` produces an invalid identity until
+     this lands.
+   * TLS session cache (`setSessionCacheEnabled_TlsRequest` is a no-op over
+     `cn_tls`); `saveSession_Context_`/`CachedSession` are OpenSSL-only and were
+     not carried over. Non-blocking for correctness, it only re-negotiates per
+     request instead of reusing a session.
+   Combine into the `classicnet-seam` submodule branch; host-test a
+   server-cert + identity round-trip.
 2. **N3 — into the canvas app.** Wire the seam into `canvaswin` so the viewer
    actually fetches a Gemini page over ClassicNet. Gate: integration test
    fetches a real Gemini URL asserting status/meta/body + the TOFU
