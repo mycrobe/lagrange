@@ -399,6 +399,28 @@ lagrange's OS 9 canvas host lands (Phase M):
   (const char *, uint16_t), host, port)`; a backend that omits it links a test
   with `_new_Socket` undefined.
 
+## Phase 1 seam (N2 step 2) — the `TlsRequest` backend is monolithic
+
+- **`src/tlsrequest.c` is one file defining BOTH `iTlsCertificate` and
+  `iTlsRequest`.** `gmcerts.c` exercises almost every `iTlsCertificate` method
+  (subject/issuer *name components*, `subjectAltNames`, fingerprints,
+  `verify`/`verifyDomain`, `validUntil`/`isExpired`, `pem`, `equal`,
+  `newSelfSignedRSA_TlsCertificate`). Since swapping `tlsrequest.c` out for the
+  ClassicNet backend removes all of them, a partial port would leave undefined
+  symbols at link time — the mbedTLS replacement must export the full API.
+- **mbedTLS cannot generate certificates** (parse/verify only). `gmcerts` calls
+  `newSelfSignedRSA_TlsCertificate` to mint self-signed test identities, and
+  `newSelfSignedRSA_TlsCertificate` is OpenSSL-only in the stock code. That
+  method needs a fallback/probe (a different generator or a bundled pre-made
+  test keypair) — it cannot be a straight API-for-API mbedTLS port. This
+  interacts with the later Gemini client-cert (P-3) work.
+- **Splitting the port:** the `cn_tls` transport flow can be landed first as a
+  self-contained `iTlsRequest` test (connect → mbedTLS handshake → write content
+  → stream received bytes → `finished`), reusing the `cn_darwin8`+`cn_tls`
+  pump proven by the N1 smoke (`gmclassicnet_smoke.c`); the `iTlsCertificate`
+  X.509-from-mbedTLS wrapper is the bulk of the remaining ~1300 lines.
+  The `-P-3`/`C-3` naming in the plan tracks this (client cert identity).
+
 ## Dead ends (proven — do not retry) **[starscape]**
 
 - Secure Transport on Tiger/Classic: TLS 1.0 max — double dead for gemini.

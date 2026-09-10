@@ -2,7 +2,8 @@
 
 ## Where we are
 
-**Phase 1 — ClassicNet network seam (host-first); N1 is done, N2 is next.**
+**Phase 1 — ClassicNet network seam (host-first); N1 done, N2 step 1 (Socket)
+done, N2 step 2 (TlsRequest) next.**
 Phase order is **1) ClassicNet on the host → 2) Tiger/Cocoa → 3) Classic**,
 with the cross-build tool systems as parallel enabling work. The seam reuses
 the "escape SDL" pattern for networking: keep `gmrequest.c`/`gmcerts` untouched
@@ -10,6 +11,15 @@ and reimplement the_Foundation's `iSocket`/`iTlsRequest` over ClassicNet's
 `CNTransport` vtable (`cn_darwin8` host/Tiger, `cn_ot` Classic, `cn_tls`
 mbedTLS, `CN_TLS_FORCE_TLS12=1`) behind the identical public API, with a
 `LAGRANGE_CLASSICNET` compile-time switch.
+
+**Seam state:** `the_Foundation` (`classicnet-seam` branch, pin `f30fdd8`) has
+the ClassicNet-backed `iSocket` (N2 step 1, host-tested under ASan); `iSocket`
+I/O is selected by `TFDN_CLASSICNET=ON`, which lagrange sets when
+`ENABLE_CLASSICNET=ON`. The `iTlsRequest` backend is NOT yet done (N2 step 2).
+⚠️ **`the_Foundation`'s `classicnet-seam` branch is LOCAL-ONLY (never pushed)** —
+the lagrange pin `f30fdd8` references a local commit, so a fresh clone cannot
+reproduce it. Push the branch (and keep the pin in sync) before relying on a
+clean checkout, or the seam has nothing to pin to.
 
 **N1 (host wiring) is complete and gated on the host this session (2026-09-09):**
 ClassicNet is vendored as a git submodule at `vendor/ClassicNet` (pinned to the
@@ -73,15 +83,31 @@ Evidence / reproduce:
 
 ## In-flight
 
-1. **N2 step 2 — `TlsRequest` backend** (next). Reimplement `iTlsRequest` over
-   `cn_tls` (mbedTLS, `CN_TLS_FORCE_TLS12=1`): map `submit`/`readAll`/
-   `serverCertificate`/`isVerified`/`setVerifyFunc` and the `readyRead`/`sent`/
-   `finished` audiences to mbedTLS + `gmcerts`. This is the larger slice —
-   `tlsrequest.c` is ~1300 lines including the `iTlsCertificate` X.509 wrapper
-   (subject/issuer/alt-names, fingerprints, verify/expiry, domain match) that
-   must map to mbedTLS + `gmcerts`. Branch stays in the `classicnet-seam`
-   submodule branch. **Gate:** host unit test of the TlsRequest backend against
-   a local TLS server, ASan/UBSan clean; `build-host` stock `app` still green.
+1. **N2 step 2 — `TlsRequest` backend** (next; large, monolithic). Reimplement
+   `iTlsRequest` over `cn_tls` (mbedTLS, `CN_TLS_FORCE_TLS12=1`): map `submit`/
+   `readAll`/`serverCertificate`/`isVerified`/`setVerifyFunc` and the `readyRead`/
+   `sent`/`finished` audiences to mbedTLS + `gmcerts`. **Two hard constraints:**
+   - *Monolithic symbol set.* `the_Foundation/src/tlsrequest.c` is one file
+     providing **both** `iTlsCertificate` and `iTlsRequest`; `gmcerts.c` uses
+     nearly every `iTlsCertificate` method (subject/issuer name components,
+     alt-names, fingerprints, `verify`/`verifyDomain`, `validUntil`/`isExpired`,
+     `pem`, `equal`, `newSelfSignedRSA_TlsCertificate`). A partial port leaves
+     undefined symbols once `tlsrequest.c` is swapped out, so the mbedTLS
+     replacement must export the full API in one go (~1300+ lines).
+   - *mbedTLS cannot generate certificates.* `gmcerts.c` calls
+     `newSelfSignedRSA_TlsCertificate` (self-signed test identities) — an OpenSSL
+     capability; mbedTLS only parses/verifies. That method needs a fallback/probe
+     (cf. the P-3 client-auth/cert work), so a straight API-for-API port is
+     impossible.
+   **Sub-sequencing:** *(2a)* the `iTlsRequest` transport over `cn_tls` (connect →
+   handshake → write content → stream response → `sent`/`readyRead`/`finished`,
+   `status`/`isVerified`/`serverCertificate`) + the `iTlsCertificate` core over
+   mbedTLS (parse/verify/expiry/`pem`/fingerprint/`verifyDomain`), host-tested
+   against a local TLS server with the pinned test CA; *(2b)* the remaining
+   `iTlsCertificate` name-component extraction + the self-signed-generation
+   workaround. **Gate:** host unit test of the TlsRequest backend against a local
+   TLS server, ASan/UBSan clean; `build-host` stock `app` still green.
+   Branch stays in the `classicnet-seam` submodule branch.
 2. **N3 — into the canvas app.** Wire the seam into `canvaswin` so the viewer
    actually fetches a Gemini page over ClassicNet. Gate: integration test
    fetches a real Gemini URL asserting status/meta/body + the TOFU

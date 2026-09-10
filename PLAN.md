@@ -124,6 +124,13 @@ Milestones (host-verifiable; **each gates on its test before the next**):
   `the_Foundation` to `classicnet`; host unit test against a loopback TCP echo
   server is ASan-clean. *Step 2 remains:* the `TlsRequest` backend over `cn_tls`
   (mbedTLS) + the `iTlsCertificate` X.509 wrapper → `gmcerts`.
+  *Step-2 is monolithic:* `tlsrequest.c` defines both `iTlsCertificate` and
+  `iTlsRequest`, and `gmcerts` uses nearly every cert method, so a partial port
+  breaks linking; and `newSelfSignedRSA_TlsCertificate` (self-signed generation)
+  is OpenSSL-only — mbedTLS has no cert generation. Land (2a) the transport +
+  iTlsCertificate core (parse/verify/expiry/pem/fingerprint/domain) first, then
+  (2b) name components + the self-signed workaround. ⚠️ push `the_Foundation`'s
+  `classicnet-seam` branch (local-only) so the pin `f30fdd8` is reproducible.
   **Test gate:** host unit tests of the backends against ClassicNet's loopback
   `CNTransport` (framing + audiences + cert-verify → `gmcerts`), ASan/UBSan clean;
   `build-host` stock `app` still green.
