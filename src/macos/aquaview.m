@@ -520,6 +520,47 @@ static void cursorHookAqua_(int cursorId, void *unused) {
 }
 @end
 
+/* ------------------------------------------------------------------ URLs --- */
+/* A Finder `open gemini://host/path` (or `open /tmp/L4.app gemini://...`) sends
+   a kAEGetURL AppleEvent to the app.  The real macos.m host registers the same
+   handler; the Aqua host needs it too, because launch bundles cannot take a
+   positional URL arg: Tiger's `open` has no --args, and the widget kit's argv
+   path only sees -psn_ stripped args.  Registering the scheme here -- and
+   declaring it in Info.plist CFBundleURLTypes -- lets a launch URL reach the
+   widget kit as a `~open newtab:1 url:` command, exactly like macos.m does. */
+@interface AquaURLHandler : NSObject
+- (void)handleURLEvent:(NSAppleEventDescriptor *)event
+        withReplyEvent:(NSAppleEventDescriptor *)replyEvent;
+@end
+
+@implementation AquaURLHandler
+- (void)handleURLEvent:(NSAppleEventDescriptor *)event
+        withReplyEvent:(NSAppleEventDescriptor *)replyEvent {
+    (void) replyEvent;
+    NSString *url = [[event paramDescriptorForKeyword:keyDirectObject] stringValue];
+    if (!url || [url length] == 0) {
+        return;
+    }
+    iString *str = newCStr_String([url cStringUsingEncoding:NSUTF8StringEncoding]);
+    str = urlDecodeExclude_String(collect_String(str), "/#?:");
+    postCommandf_App("~open newtab:1 url:%s", cstr_String(str));
+    delete_String(str);
+}
+@end
+
+void registerUrlHandler_Aqua(void) {
+    static AquaURLHandler *handler;
+    if (handler) {
+        return;
+    }
+    handler = [[AquaURLHandler alloc] init];
+    [[NSAppleEventManager sharedAppleEventManager]
+        setEventHandler:handler
+            andSelector:@selector(handleURLEvent:withReplyEvent:)
+          forEventClass:kInternetEventClass
+             andEventID:kAEGetURL];
+}
+
 /* C-visible autorelease-pool helpers for aquamain.c (which is C). */
 void *beginAutoreleasePool_Aqua(void) {
     return [[NSAutoreleasePool alloc] init];

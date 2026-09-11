@@ -301,6 +301,32 @@ logfile, `AQUA_DEBUG`). `osx/Info.plist`'s `LSEnvironment` is added at deploy
 time by editing the deployed plist (Tiger has no `PlistBuddy`; use perl).
 **[2026-09-10]**
 
+**Tiger's `open` has NO `--args` — a bundle-launched app takes a URL only via a
+`kAEGetURL` AppleEvent, so register the scheme (durable, 2026-09-10).** On Tiger
+(10.4) `open --args gemini://...` is not supported: `open` treats `--args` (and
+`-h`) as a file path and errors `No such file: /Users/<user>/--args`. A bundle-
+launched GUI app therefore cannot receive a positional URL argv — the widget
+kit's argv path only ever sees the `-psn_` arg (stripped above). The real
+`macos.m` host solves this by registering a `kAEGetURL` handler
+(`registerURLHandler_MacOS`) + declaring `CFBundleURLTypes`, so a Finder
+`open gemini://host/path` delivers the URL as an AppleEvent. The Aqua host is a
+separate lean host and lacks this — so add it: `src/macos/aquaview.m` gets an
+`AquaURLHandler` (`registerUrlHandler_Aqua`, sets the `kInternetEventClass`/
+`kAEGetURL` handler, posts `~open newtab:1 url:%s` after `urlDecodeExclude_String`),
+and `osx/Info.plist` declares `CFBundleURLTypes` for `gemini`/`gopher`/`gophers`/
+`spartan`. Call `registerUrlHandler_Aqua()` in `aquamain.c` BEFORE `[NSApp run]`
+(registered right after `initAquaView_app`, so a launch URL is live when the run
+loop starts). Registering the scheme is also what makes a fresh `open
+gemini://...` spin up the app from a URL at all. With this, the drive recipe for
+an on-device fetch is: `open /tmp/L4.app` then `open gemini://host/path` (the
+second `open` forwards to the already-running instance via the handler). The
+single-instance IPC means a URL `open` while another instance is running is
+deferred to it, and the app-owned log overwrites per launch — kill by PID
+(`ps -Ao pid,command | grep /tmp/L4.app`, `kill -9`) between runs so a fresh
+instance + fresh log. Evidence: `~/classic/petal/logs/l4-aqua-tofu-git-fetch-2026-09-10.png`
++ `-tofu-capsule-...png` + `-tofu-mismatch-...png` + `-tofu-runtime-...txt`.
+**[2026-09-10]**
+
 **Aqua host must run `[NSApp run]` for the native menu bar, and step the widget
 kit from a timer (durable).** A bare `NSApplication` (no nib) driven by a manual
 pump hook (`nextEventMatchingMask:untilDate:0` = an immediate non-blocking poll)

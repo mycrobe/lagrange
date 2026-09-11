@@ -26,3 +26,9 @@ void runAquaMainLoop(void);
    per-frame pool so the timer-driven render churn drains each frame. */
 void *beginAutoreleasePool_Aqua(void);
 void  endAutoreleasePool_Aqua(void *pool);
+
+/* Register the kAEGetURL AppleEvent handler so a Finder
+   `open gemini://host/path` delivers the URL to the widget kit as a
+   `~open newtab:1 url:` command (Tiger's `open` has no --args, so a
+   bundle-launched app cannot take a positional URL arg). */
+void registerUrlHandler_Aqua(void);

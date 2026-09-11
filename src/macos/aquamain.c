@@ -93,6 +93,11 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr, "[aqua] view init ok\n");
 
+    /* Register the gemini/scheme URL handler BEFORE the run loop so a bundle
+       launch with an `open gemini://...` URL reaches the widget kit. */
+    registerUrlHandler_Aqua();
+    fprintf(stderr, "[aqua] URL handler registered\n");
+
     fprintf(stderr, "[aqua] entering AppKit main loop\n");
     stripPsnArgs_(&argc, &argv);
     init_App(argc, argv);

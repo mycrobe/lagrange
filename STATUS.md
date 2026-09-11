@@ -12,6 +12,20 @@ build systems + the network slice**, which is what this ledger's latest
 milestone covers. Phase order stays **1) host seam → 2) Tiger/Cocoa → 3)
 Classic**, with the cross-build tool systems as the parallel enabling work.
 
+**The T-tier fetch/TOFU slice is now evidenced end-to-end on real Tiger
+hardware (2026-09-10).** The reconciled milestone: `L4.app` does a **real
+ClassicNet fetch over the network on petal** (renders a live Gemini page) and
+the **TOFU trust gate is exercised in both states** — a self-signed cert
+whose SAN matches the host is pinned/trusted and renders; a self-signed cert
+whose SAN does NOT match the host is rejected by the verify callback and the
+fetch is gated (no page). Two on-device additions made this tight: (1) the
+Aqua host now registers a `kAEGetURL` handler + the bundle declares
+`gemini`/`gopher`/`gophers`/`spartan` URL schemes, because **Tiger's `open`
+has no `--args`**, so the only way to feed a URL to a bundle-launched GUI app
+is a Finder `open gemini://...` AppleEvent; and (2) `osx/Info.plist`
+`LSEnvironment= AQUA_DEBUG` so the app-owned log lands in `/tmp/L4.log`
+(unbuffered) instead of being discarded. See "Last completed milestone".
+
 **The darwin8 cross-build pipeline is now standing and proven on this machine.**
 The lagrange `osx/` CMake project cross-compiles the vendored ClassicNet
 darwin8 slice (`cn_darwin8` BSD sockets + `cn_tls` mbedTLS + `target/d8_time.c`)
@@ -31,47 +45,61 @@ See "Last completed milestone" + In-flight for the details.
 
 ## Last completed milestone
 
-**Aqua (Tiger/Leopard PPC) canvas host: cross-build → `L4.app` and RUNS on real
-Tiger hardware with a native menu bar (2026-09-10).**
-A programmatic single-window AppKit host (`src/macos/`) cross-compiles and links
-into a **PPC Mach-O** `L4` inside a `L4.app` bundle — the whole portable core +
-widget kit + software-framebuffer shim against the `the_Foundation`/ClassicNet
-seam. Launched on petal (Tiger 10.4.11) it shows the full window, renders Gemini
-content, has a working **native NSMenu bar** (`L4` app menu + File/Edit/View/
-Bookmarks/Identity/Window/Help) with **native Cmd shortcuts**, and fetches pages
-over ClassicNet. Key on-device fixes: the_Foundation big-endian archive bug
-(`stream.c` `iHaveBigEndian`), the Finder `-psn_` argv, and the `[NSApp run]`
-run-loop integration (see docs/arcana.md).
+**T-tier fetch/TOFU slice: L4 does a real ClassicNet fetch + seen both trust
+states on real Tiger hardware (2026-09-10).**
+`L4.app` (PPC Mach-O, this ledger's Aqua canvas host) fetches a Gemini page
+over the network on petal (Tiger 10.4.11) and renders it — the whole
+`gmrequest`→`iTlsRequest`→ClassicNet seam (`cn_darwin8` + `cn_tls`/mbedTLS)
+in a real window, not just the seam smoke. **And the TOFU trust gate is
+exercised in both directions on-device:**
+- **Trusted/pinned (TOFU first-use):** a self-signed capsule cert with SAN
+  `DNS:localhost`, fetched via `gemini://localhost:1966/`, is domain-verified
+  + not expired → `checkTrust_GmCerts` pins it → page renders with the
+  secure lock.
+- **Untrusted/mismatch (gate rejects):** a self-signed cert with SAN
+  `DNS:badname.invalid` fetched via `gemini://127.0.0.1:1967/` fails
+  domain verification → the mbedTLS verify callback rejects the leaf → the
+  handshake aborts, no page renders (the mismatch/not-verified gate).
 
-Evidence / reproduce (`scripts/build-osx.sh`, inside the amd64 `ubuntu:24.04`
-container with the darwin8 toolchain):
-- `L4.app/Contents/MacOS/L4` = `Mach-O ppc executable`. Sources:
-  the widget kit (`src/ui/*`), `src/render/text_stb.c`, `src/ui/canvas/sdlcompat.c`
-  (software framebuffer), `src/macos/aquaview.m` (NSWindow + NSView +
-  `NSBitmapImageRep` blit + NSEvent→shim event translation), `src/macos/aquamain.c`.
-- On-device evidence: `~/classic/petal/logs/l4-aqua-native-menu-2026-09-10.png`
-  (merged `L4` menu bar + window), `l4-aqua-ondevice-2026-09-10.png`,
-  `l4-aqua-runtime-2026-09-10.txt` (log), `lagrange-d8-archive-tfdn-2026-09-10.txt`
-  (the_Foundation big-endian ZIP proof).
-- **Two mandatory `the_Foundation` deps cross-built for darwin8** (arcana):
-  `libunistring 1.4.2` (prior witness) and **PCRE2 10.47** (`deps/pcre2-darwin8`,
-  GNU/GitHub sig-verified — regexp is required by `gmdocument.c`'s `iRegExp`).
-  zlib (`iHaveZlib`) comes from libSystem via `osx/pkgconfig/zlib.pc`.
-- osx plumbing: `project(..., C OBJC)` + `CMAKE_OBJC_FLAGS` (`-std=gnu99
-  -fobjc-exceptions`); quote-include fix (CarbonCore's `resources.h` shadow);
-  `execinfo` shim (`darwin8_sdk_shim/execinfo.h`); `NDEBUG` (host canvas is
-  Release). Prerequisite (still the portability witness): the `the_Foundation`
-  ClassicNet seam cross-build + on-device fetch, `d8_tls_smoke`:
+Two on-device fixes were required. **(1) The Aqua host could not receive a
+URL.** A bundle-launched GUI app on Tiger cannot take a positional URL arg:
+`open --args` does not exist (Tiger's `open` treats `--args`/`-h` as a file),
+and the widget kit's argv path only ever sees the `-psn_` arg. Fix: the Aqua
+host registers a `kAEGetURL` AppleEvent handler (`registerUrlHandler_Aqua` in
+`src/macos/aquaview.m`, posted to the widget kit as `~open newtab:1 url:%s`,
+exactly like `macos.m`) and `osx/Info.plist` declares
+`CFBundleURLTypes` for `gemini`/`gopher`/`gophers`/`spartan`, so a Finder
+`open gemini://host/path` delivers the URL. **(2) The app-owned log was
+discarded** (Finder-launched apps don't inherit ssh stdout): `osx/Info.plist`
+`LSEnvironment { AQUA_DEBUG=1 }` routes stderr to `/tmp/L4.log` (the code
+`freopen`s + `setvbuf` unbuffered; see arcana "Aqua host on-device run").
 
-  - On-device (petal, iMac G4 / OS X 10.4.11 PPC; host capsule `192.168.7.146:1966`):
-    `/tmp/d8_tls_smoke 192.168.7.146 1966 /` → `[classicnet] TCP connect` +
-    `TLS handshake OK (mbedTLS via cn_tls)` + `d8_tls_smoke OK: status '20
-    text/gemini' body=216 certSubj='CN = localhost' isVerified=1`. Evidence:
-    `~/classic/petal/logs/lagrange-d8-tfdn-smoke-2026-09-10.txt`.
-  - `build-osx/d8_tls_smoke` = `Mach-O executable ppc`; darwin8 toolchain:
-    `~/classic/darwin8-toolchain` (danupsher GCC 15.2 + cctools-port + 10.4u SDK),
-    docker `ubuntu:24.04` amd64 under Rosetta
-    (`~/.local/share/doc/darwin8-toolchain.md`).
+The capsule+fetch is driven via a host-side `gemini_capsule.py` reverse
+tunneled through `ssh -R` to petal's loopback (certs for `localhost` and for
+the mismatched `badname.invalid` generated on the host with openssl).
+
+Evidence / reproduce:
+- `~/classic/petal/logs/l4-aqua-tofu-git-fetch-2026-09-10.png` (real fetch:
+  the live `git.skyjake.fi/lagrange/release` page, green lock).
+- `l4-aqua-tofu-capsule-2026-09-10.png` (trusted self-signed capsule:
+  `gemini://localhost:1966/` renders "Welcome to the ClassicNet test capsule").
+- `l4-aqua-tofu-mismatch-2026-09-10.png` + `-mismatch2-...png` (untrusted
+  gate: `gemini://127.0.0.1:1967/` mismatch → no page).
+- `l4-aqua-tofu-runtime-2026-09-10.txt` (log: `[classicnet] TCP connect
+  git.skyjake.fi:1965` / `localhost:1966` / `127.0.0.1:1967` + `TLS handshake
+  OK ...`). Capsule server request log confirms the 1966 + 1967 fetches.
+- Seam gate: `scripts/test-classicnet-tls.sh` still green
+  (`[ca]/[tofu]/[selfgen]/[reject]` OK) — the seam-level TOFU gate is intact.
+- `build-host` stock `app` still builds (regression gate).
+
+Deploy/run recipe (per-machine detail in `~/.local/share/doc/petal.md` + the
+arcana "Aqua host on-device run"): build via `scripts/build-osx.sh` inside
+the amd64 darwin8 container → assemble `L4.app` with the repo `osx/Info.plist`
++ `build-osx/L4.app/.../resources.lgr` → `scp -r` to `/tmp/L4.app` on petal →
+`open /tmp/L4.app` (LaunchServices) → `open gemini://localhost:1966/` to
+inject a URL. The single-instance IPC means a fresh instance only runs on a
+clean launch; kill by PID (`pkill -9 -f /tmp/L4.app` may miss the truncated
+cmdline) between runs.
 
 ## In-flight
 
@@ -152,13 +180,18 @@ container with the darwin8 toolchain):
     assert). Evidence: `~/classic/petal/logs/l4-aqua-native-menu-2026-09-10.png`.
     **Remaining:** the glyph `〉` (U+3009, sidebar collapse arrow) missing from the
    bundled fontpack (`failed to find 00003009`); context-menu popups
-   (`showPopupMenu_MacOS` needs an `NSEvent`, deferred); a real network fetch +
-   TOFU screenshot (the app does fetch over ClassicNet — `[classicnet] TCP/TLS
-   tilde.club` — but a tactile TOFU shot is still pending). The app's real trust
-   gate + `gmrequest`/`gmcerts` integration come with the fetch/TOFU slice.
- 2. **N3 tactile confirmation (from Phase 1, still pending)** — the visual check
-    that `canvaswin` shows a fetched page + the TOFU trust/mismatch UI on
-   QEMU/petal (fetch is proven at the seam + headless-render level).
+   (`showPopupMenu_MacOS` needs an `NSEvent`, deferred). The real-network
+   fetch + TOFU trust gate (both states) is now evidenced on-device — see the
+   "Last completed milestone". New with that slice: the Aqua host registers a
+   `kAEGetURL` handler + `osx/Info.plist` declares `gemini`/`gopher`/`gophers`/
+   `spartan` URL schemes (Tiger's `open` has no `--args`), and `LSEnvironment`
+   `AQUA_DEBUG` so the app-owned log lands in `/tmp/L4.log`.
+ 2. **N3 tactile confirmation (Phase 1) is now largely covered by the T-tier
+    fetch/TOFU evidence above** — the visual check that the app shows a fetched
+    page + the TOFU trust/mismatch UI, on petal, was produced for the Aqua host
+    (`L4.app`). For the SAME canvasview path the *host* N3 target (`canvaswin`)
+    fetched/render is already proven headless; a windowed canvas confirmation on
+    QEMU/petal is still the residual.
 3. **M-tier mandatory the_Foundation C libs — standing (2026-09-10).**
    `deps/libunistring-retro68` (iconv-free, `U iconv*` clean;
    `scripts/setup-libunistring.sh`) plus the other two mandatory GNU C libs:
