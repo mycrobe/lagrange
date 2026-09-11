@@ -5193,6 +5193,15 @@ static iBool processEvent_DocumentWidget_(iDocumentWidget *d, const SDL_Event *e
         return iTrue;
     }
     else if (ev->type == SDL_MOUSEMOTION) {
+        if (getenv("AQUA_MOUSEDBG")) {
+            const iRect wb = bounds_Widget(w);
+            fprintf(stderr,
+                    "[dw] motion widget=%p at=%d,%d win=%u hovered=%d vis=%d rect=%d,%d %dx%d "
+                    "root=%p winsize=%d,%d\n",
+                    (void *) d, ev->motion.x, ev->motion.y, ev->motion.windowID, isHover_Widget(d),
+                    isVisible_Widget(w), wb.pos.x, wb.pos.y, wb.size.x, wb.size.y, (void *) w->root,
+                    size_Root(w->root).x, size_Root(w->root).y);
+        }
         if (ev->motion.which != SDL_TOUCH_MOUSEID) {
             iChangeFlags(d->flags, noHoverWhileScrolling_DocumentWidgetFlag, iFalse);
         }
@@ -5474,6 +5483,11 @@ static iBool processEvent_DocumentWidget_(iDocumentWidget *d, const SDL_Event *e
             }
             if (!isMoved_Click(&d->click)) {
                 setFocus_Widget(NULL);
+                if (getenv("AQUA_MOUSEDBG")) {
+                    fprintf(stderr, "[dw] click finished pos=%d,%d isMoved=0 hoverLink=%p hoverPre=%p\n",
+                            pos_Click(&d->click).x, pos_Click(&d->click).y,
+                            (void *) view->hoverLink, (void *) view->hoverPre);
+                }
                 /* Tap in tap selection mode. */
                 if (flags_Widget(w) & touchDrag_WidgetFlag) {
                     const iRangecc tapLoc = sourceLoc_DocumentView(view, pos_Click(&d->click));

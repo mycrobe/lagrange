@@ -46,6 +46,15 @@ static void captureCanvas_(void) {
     if (gCanvasH_ < 0) gCanvasH_ = 0;
 }
 
+/* AQUA_MOUSEDBG: log every translated mouse event with both the raw view
+   geometry and the letterbox-mapped canvas point, so an on-device trace shows
+   whether the shim events carry the coordinates the widget kit expects. */
+static int mouseDbg_(void) {
+    static int enabled = -1;
+    if (enabled < 0) enabled = getenv("AQUA_MOUSEDBG") ? 1 : 0;
+    return enabled;
+}
+
 /* key-translation helpers, defined below (used by the view's keyDown/keyUp and
    the AquaWindow key-equivalent forwarder). */
 static Uint32 keySymFromEvent_(NSEvent *e, int *scancode);
@@ -215,6 +224,14 @@ static Uint16 keyModFromFlags_(unsigned long f);
     ev.button.x = (Sint32) p.x;
     ev.button.y = (Sint32) p.y;
     SDL_PushEvent(&ev);
+    if (mouseDbg_()) {
+        NSRect r = [self canvasRectInView];
+        fprintf(stderr, "[aqua] mouse %s at=%d,%d view=%dx%d canvas=%dx%d rect=%.0f,%.0f %.0fx%.0f s=%.2f\n",
+                down ? "down" : "up", (int) p.x, (int) p.y,
+                (int) NSWidth([self bounds]), (int) NSHeight([self bounds]),
+                gCanvasW_, gCanvasH_, r.origin.x, r.origin.y, r.size.width, r.size.height,
+                [self canvasScaleInView]);
+    }
     if (down) {
         buttons_ |= SDL_BUTTON(button);
     }
@@ -239,6 +256,12 @@ static Uint16 keyModFromFlags_(unsigned long f);
     ev.motion.y = (Sint32) p.y;
     ev.motion.state = (Uint32) buttons_;
     SDL_PushEvent(&ev);
+    if (mouseDbg_()) {
+        fprintf(stderr, "[aqua] mouse move at=%d,%d view=%dx%d canvas=%dx%d\n",
+                (int) p.x, (int) p.y,
+                (int) NSWidth([self bounds]), (int) NSHeight([self bounds]),
+                gCanvasW_, gCanvasH_);
+    }
 }
 
 - (void)mouseDragged:(NSEvent *)e { [self mouseMoved:e]; }
@@ -345,8 +368,67 @@ static Uint16 keyModFromFlags_(unsigned long f) {
 
 @end
 
-/* ------------------------------------------------------------------ hooks --- */
+/* ------------------------------------------------- AQUA_MOUSEDBG self-test --- */
+/* CGEvent posts from an SSH session are dropped by Tiger's WindowServer, so a
+   headless diagnostic cannot drive the app with a synthetic system cursor.
+   AQUA_SELFTEST="cx,cy" instead feeds synthesized NSEvents straight into the
+   view's own mouse methods (AQUA_SELFTEST_IMMEDIATE=1 puts the click in the
+   same callback as the move), which exercises the exact sdlPoint -> SDL_PushEvent
+   -> widget-kit path the real cursor would. */
+static void sendSyntheticMouse_(AquaCanvasView *view, int type, int cx, int cy) {
+    const NSRect r = [view canvasRectInView];
+    const double s = [view canvasScaleInView];
+    const NSPoint vp = NSMakePoint(NSMinX(r) + (double) cx * s, NSMaxY(r) - (double) cy * s);
+    const NSPoint wl = [view convertPoint:vp toView:nil];
+    NSEvent *e = [NSEvent mouseEventWithType:(NSEventType) type
+                                    location:wl
+                               modifierFlags:0
+                                   timestamp:[NSDate timeIntervalSinceReferenceDate]
+                                windowNumber:[gWin_ windowNumber]
+                                     context:nil
+                                 eventNumber:0
+                                  clickCount:1
+                                    pressure:1.0];
+    if (type == NSMouseMoved) {
+        [view mouseMoved:e];
+    }
+    else if (type == NSLeftMouseDown) {
+        [view mouseDown:e];
+    }
+    else if (type == NSLeftMouseUp) {
+        [view mouseUp:e];
+    }
+}
 
+static int gSelfTestX_, gSelfTestY_;
+
+@interface AquaSelfTest : NSObject
+- (void)move:(NSTimer *)timer;
+- (void)click:(NSTimer *)timer;
+@end
+
+@implementation AquaSelfTest
+- (void)move:(NSTimer *)timer {
+    (void) timer;
+    AquaCanvasView *view = (AquaCanvasView *) gView_;
+    if (!view) return;
+    fprintf(stderr, "[aqua] selftest move at %d,%d\n", gSelfTestX_, gSelfTestY_);
+    sendSyntheticMouse_(view, NSMouseMoved, gSelfTestX_, gSelfTestY_);
+    if (getenv("AQUA_SELFTEST_IMMEDIATE")) {
+        [self click:nil];
+    }
+}
+- (void)click:(NSTimer *)timer {
+    (void) timer;
+    AquaCanvasView *view = (AquaCanvasView *) gView_;
+    if (!view) return;
+    fprintf(stderr, "[aqua] selftest click at %d,%d\n", gSelfTestX_, gSelfTestY_);
+    sendSyntheticMouse_(view, NSLeftMouseDown, gSelfTestX_, gSelfTestY_);
+    sendSyntheticMouse_(view, NSLeftMouseUp, gSelfTestX_, gSelfTestY_);
+}
+@end
+
+/* ------------------------------------------------------------------ hooks --- */
 static void presentHookAqua_(int winIndex) {
     (void) winIndex;
     if (!gView_) return;
@@ -459,6 +541,25 @@ void runAquaMainLoop(void) {
                                    selector:@selector(tick:)
                                    userInfo:nil
                                     repeats:YES];
+    {
+        const char *st = getenv("AQUA_SELFTEST");
+        if (st && sscanf(st, "%d,%d", &gSelfTestX_, &gSelfTestY_) == 2) {
+            static AquaSelfTest *selfTest;
+            const char *delay = getenv("AQUA_SELFTEST_DELAY");
+            const double at = delay ? atof(delay) : 4.0;
+            selfTest = [[AquaSelfTest alloc] init];
+            [NSTimer scheduledTimerWithTimeInterval:at
+                                             target:selfTest
+                                           selector:@selector(move:)
+                                           userInfo:nil
+                                            repeats:NO];
+            [NSTimer scheduledTimerWithTimeInterval:at + 0.6
+                                             target:selfTest
+                                           selector:@selector(click:)
+                                           userInfo:nil
+                                            repeats:NO];
+        }
+    }
     [[NSApplication sharedApplication] run];
 }
 

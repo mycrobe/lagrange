@@ -380,17 +380,30 @@ keyboard shortcuts still work, since they don't need the key window). Fix:
 shim canvas; `sdlPoint` and `drawCanvasInto` share a `canvasRectInView`
 letterbox transform so clicks stay correct when the window is resized (before this,
 a resized window ≠ 900x560 → clicks/hover missed widgets).
-**Open blocker (not yet root-caused, 2026-09-10):** even with correct delivery +
-coords, document LINKS don't activate — clicks reach the document as real clicks
-(`isMoved=false`) but `view->hoverLink` stays NULL (activated only when the hovered
-link is set). Instrumentation showed the mouse→document `hoverPos` is offset by the
-banner/`viewPos` (self-test click at canvas centre landed ABOVE the content,
-negative `hoverPos.y`) and mouse-move events appear dropped (the build does not
-define `iPlatformApple`, so the widget kit's motion-accumulation at `app.c` is
-active). The document *does* have links (`visibleLinks` n=2). Suspects to pursue:
-define `iPlatformApple` for the shim build (disables motion accumulation, but watch
-the macOS coupling), or fix the document `documentBounds`/`viewPos` mapping on this
-host. Evidence: `~/classic/petal/logs/l4-aqua-mouse-2026-09-10.txt`.
+**Untagged shim events must target the *presented* window, not the last created
+one (root cause of "mouse dead but keyboard fine", 2026-09-10).** The Aqua host
+synthesizes shim SDL events and leaves `windowID == 0`; `SDL_PushEvent()` filled
+it in with `g_nextWindowId` (*last created* window). Lagrange creates several
+windows at startup, but the canvas host only ever presents window index 0
+(`SDL_RenderPresent` → `presentHook_(0)`; the Aqua host blits index 0), and the
+main/visible window is the first one created. So mouse motion/buttons were tagged
+to a later, hidden window whose `DocumentWidget` was empty
+(`documentBounds.size.y == 0`, `visibleLinks == 0`), and `view->hoverLink` could
+never be set — clicks reached a document that had nothing to click. **Keyboard
+events were unaffected because key events are not in the window-tagging branch at
+all (windowID stays 0, and `dispatchEvent_Window` only filters when it is
+non-zero)** — the menu bar and Cmd shortcuts kept working while the mouse looked
+dead, which is what made this so misleading (and wrongly fingered the
+`[NSApp run]`+timer event loop). Fix: tag with `g_windows[0]->id`. This also
+*removes* the "motion accumulation / `iPlatformApple`" theory: with routing
+fixed, hover updates normally and the shared widget-kit code paths (identical on
+the host) behave correctly. On-device diagnostics: Tiger's WindowServer drops
+`CGEventPost` from an SSH session, so a synthetic system cursor cannot drive the
+app remotely; use the gated in-app self-test `AQUA_SELFTEST="cx,cy"`
+(`AQUA_SELFTEST_DELAY`, `AQUA_SELFTEST_IMMEDIATE`) in `aquaview.m`, with
+`AQUA_MOUSEDBG=1` to trace the `[aqua]`/`[dw]`/`[hover]`/`[shim] PushEvent` legs.
+Evidence: `~/classic/petal/logs/l4-aqua-mouse-2026-09-10.txt` (old, pre-fix) and
+`l4-aqua-linkfix-2026-09-10.png`/{txt}. **[2026-09-10]**
 **[2026-09-10]**
 NOT `iBigEndian`. Any `#if defined (iBigEndian)` in the_Foundation source is a
 no-op on all builds (the macro is never defined), silently forcing the

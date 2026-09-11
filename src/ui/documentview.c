@@ -61,6 +61,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 #include <SDL_render.h>
 #include <ctype.h>
 #include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 /*----------------------------------------------------------------------------------------------*/
 
@@ -435,6 +437,20 @@ void updateHover_DocumentView(iDocumentView *d, iInt2 mouse) {
                 d->hoverLink = run;
                 break;
             }
+        }
+    }
+    if (getenv("AQUA_MOUSEDBG") && (mouse.x || mouse.y)) {
+        fprintf(stderr,
+                "[hover] mouse=%d,%d doc=%d,%d %dx%d topPad=%d banner=%d scroll=%d "
+                "viewPos=%d hoverPos=%d,%d links=%d -> %p\n",
+                mouse.x, mouse.y, docBounds.pos.x, docBounds.pos.y, docBounds.size.x,
+                docBounds.size.y, documentTopPad_DocumentView(d), height_Banner(d->banner),
+                (int) pos_SmoothScroll(&d->scrollY), viewPos_DocumentView(d), hoverPos.x,
+                hoverPos.y, (int) size_PtrArray(&d->visibleLinks), (void *) d->hoverLink);
+        iConstForEach(PtrArray, dbg, &d->visibleLinks) {
+            const iGmRun *run = dbg.ptr;
+            fprintf(stderr, "[hover]   link run bounds=%d,%d %dx%d linkId=%u\n", run->bounds.pos.x,
+                    run->bounds.pos.y, run->bounds.size.x, run->bounds.size.y, run->linkId);
         }
     }
     if (d->hoverLink != oldHoverLink) {

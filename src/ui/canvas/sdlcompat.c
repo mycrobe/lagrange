@@ -287,11 +287,21 @@ int SDL_PushEvent(SDL_Event *event) {
     SDL_Event copy;
     memcpy(&copy, event, sizeof(copy));
     /* Synthetic/forwarded events may lack a window id; the widget kit needs it
-       for hover tracking (e.g., document links only open with hover set). */
+       for hover/click routing (e.g., document links only open with hover set).
+       The canvas host presents only window index 0 (see SDL_RenderPresent's
+       presentHook_(0)), and lagrange creates the main window first, so untagged
+       events belong to that window.  Tagging with the *last created* window was
+       wrong when the app had made extra windows: mouse events were then routed
+       to an empty hidden window and never reached the visible content (key
+       events were unaffected because they carry no window filter). */
     if ((copy.type == SDL_MOUSEMOTION || copy.type == SDL_MOUSEBUTTONDOWN ||
          copy.type == SDL_MOUSEBUTTONUP || copy.type == SDL_WINDOWEVENT) &&
         copy.button.windowID == 0) {
-        copy.button.windowID = g_nextWindowId; /* last created window */
+        copy.button.windowID = (g_numWindows > 0) ? g_windows[0]->id : g_nextWindowId;
+        if (getenv("AQUA_MOUSEDBG")) {
+            fprintf(stderr, "[shim] PushEvent type=%#x tagged windowID=%u\n", copy.type,
+                    copy.button.windowID);
+        }
     }
     lock_Mutex(g_eventMutex);
     pushBack_Array(g_events, &copy);
@@ -546,11 +556,12 @@ SDL_Window *SDL_CreateWindow(const char *title, int x, int y, int w, int h, Uint
     win->flags = SDL_WINDOW_SHOWN | SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_MOUSE_FOCUS;
     snprintf(win->title, sizeof(win->title), "%s", title ? title : "lagrange");
     g_windows[g_numWindows++] = win;
-    if (getenv("CANVAS_LOG_EVENTS")) {
+    if (getenv("CANVAS_LOG_EVENTS") || getenv("AQUA_MOUSEDBG")) {
         void *bt[8] = {0};
         int n = backtrace(bt, 8);
         char **sy = backtrace_symbols(bt, n);
-        fprintf(stderr, "[shim] CreateWindow id=%u '%s' %dx%d\n", win->id, win->title, w, h);
+        fprintf(stderr, "[shim] CreateWindow id=%u '%s' %dx%d flags=%#x\n", win->id, win->title, w, h,
+                flags);
         for (int k = 0; k < n && k < 6; k++) fprintf(stderr, "  bt[%d] %s\n", k, sy[k]);
         free(sy);
     }
