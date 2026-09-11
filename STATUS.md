@@ -180,7 +180,11 @@ cmdline) between runs.
     assert). Evidence: `~/classic/petal/logs/l4-aqua-native-menu-2026-09-10.png`.
     **Remaining:** the glyph `〉` (U+3009, sidebar collapse arrow) missing from the
    bundled fontpack (`failed to find 00003009`); context-menu popups
-   (`showPopupMenu_MacOS` needs an `NSEvent`, deferred). The real-network
+   (`showPopupMenu_MacOS` needs an `NSEvent`, deferred); a domain-mismatch /
+   untrusted cert should show a soft warning dialog rather than just an empty
+   page (the on-device TOFU mismatch capture showed a blank document; the
+   cert-warning banner / red-lock "soft warning" toast is still to be verified
+   on tiger). The real-network
    fetch + TOFU trust gate (both states) is now evidenced on-device — see the
    "Last completed milestone". New with that slice: the Aqua host registers a
    `kAEGetURL` handler + `osx/Info.plist` declares `gemini`/`gopher`/`gophers`/
