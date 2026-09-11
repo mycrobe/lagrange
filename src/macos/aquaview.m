@@ -38,6 +38,71 @@ static NSView   *gView_;
 static const Uint8 *gCanvasPx_; /* shim framebuffer (RGBA8888), valid until next present */
 static int gCanvasW_, gCanvasH_, gCanvasPitch_;
 
+/* Idle-CPU fix (Tiger 2026-09-11): the widget kit is stepped from an AppKit
+   timer (see AquaWidgetTimer), but on a single-core G4 a free-running 60Hz
+   tick that always redraws burns ~25% CPU at idle.  Two backend-only levers:
+   (1) dirty-gate the blit -- do not issue setNeedsDisplay + the synchronous
+   displayIfNeeded (a full-canvas CGContextDrawImage) unless the framebuffer
+   actually changed since the last present; (2) coalesce the tick -- a
+   self-rescheduling one-shot that parks to a slow interval once the scene has
+   been static for a couple of frames, and returns to 60Hz the moment a real
+   change or a native input event needs prompt service.  Everything is driven
+   from present output, so a re-arming widget ticker that redraws identical
+   pixels collapses to near-zero dispatching cost instead of 55 blits/s. */
+#define kFastInterval_Aqua  (1.0 / 60.0)
+#define kIdleInterval_Aqua  0.25
+#define kIdleStreak_Aqua    2
+
+static Uint8   *gLastPresented_;      /* copy of the framebuffer as last blitted */
+static int      gLastPresentedBytes_;
+static iBool    gPresentedThisTick_;  /* did step_App present a frame just now? */
+static iBool    gLastPresentDirty_;   /* ...and did its pixels differ from the prior frame? */
+static int      gIdleStreak_;         /* consecutive static frames (drives parking) */
+static iBool    gNeedFast_;           /* a native event wants prompt processing */
+static iBool    gInTick_;             /* re-entrancy guard for the timer re-arm */
+static id       gTimerTarget_;        /* owns the tick:; set by runAquaMainLoop */
+static NSTimer *gPendingTimer_;       /* the one-shot tick currently scheduled */
+
+static void invalidateAquaTick_(void) {
+    if (gPendingTimer_) {
+        [gPendingTimer_ invalidate];
+        [gPendingTimer_ release];
+        gPendingTimer_ = nil;
+    }
+}
+
+/* Schedule a one-shot AppKit tick.  The timer is owned here (+1) and the run
+   loop additionally retains it while scheduled; invalidate/release cleans up. */
+static void armAquaTick_(NSTimeInterval dt) {
+    invalidateAquaTick_();
+    if (!gTimerTarget_) return;
+    NSTimer *t = [NSTimer timerWithTimeInterval:dt
+                                         target:gTimerTarget_
+                                       selector:@selector(tick:)
+                                       userInfo:nil
+                                        repeats:NO];
+    /* timerWithTimeInterval: returns an autoreleased (+0) timer; the run loop
+       owns it via addTimer:.  Take our own +1 so gPendingTimer_ is a true
+       reference and the matching release in invalidateAquaTick_ / tick: is
+       balanced.  Without the retain, releasing a +0 autoreleased timer is a
+       double free (seen on-device as a malloc double-free flood). */
+    gPendingTimer_ = [t retain];
+    [[NSRunLoop currentRunLoop] addTimer:t forMode:NSDefaultRunLoopMode];
+ }
+
+/* A native event arrived (mouse/key/scroll/URL/quit).  It must be processed
+   promptly even if the tick is parked, so ask for a fast tick immediately.
+   Re-entrancy: a native event can be delivered from inside step_App via the
+   pump hook (pumpHookAqua_ sends the queued NSEvent while we are in the tick),
+   so only touch the pending timer outside the tick body. */
+static void wakeAquaTick_(void) {
+    gNeedFast_ = iTrue;
+    gIdleStreak_ = 0;
+    if (!gInTick_ && gTimerTarget_) {
+        armAquaTick_(kFastInterval_Aqua);
+    }
+}
+
 /* ------------------------------ pixel blit + drawRect -------------------- */
 
 static void captureCanvas_(void) {
@@ -76,6 +141,7 @@ static Uint16 keyModFromFlags_(unsigned long f);
     /* Let the native menu's key equivalents win (Quit, Preferences, menu items
        with shortcut labels).  Under this host's [NSApp run] + timer model the
        menu is not consulted automatically for key presses, so ask it here. */
+    wakeAquaTick_();
     NSMenu *mainMenu = [[NSApplication sharedApplication] mainMenu];
     if (mainMenu && [mainMenu performKeyEquivalent:event]) {
         return YES;
@@ -210,6 +276,7 @@ static Uint16 keyModFromFlags_(unsigned long f);
 }
 
 - (void)pushMouse:(NSEvent *)event down:(BOOL)down {
+    wakeAquaTick_();
     NSPoint p = [self sdlPoint:event];
     Uint8 button = SDL_BUTTON_LEFT;
     int btn = [event buttonNumber];
@@ -248,6 +315,7 @@ static Uint16 keyModFromFlags_(unsigned long f);
 - (void)otherMouseUp:(NSEvent *)e   { [self pushMouse:e down:NO]; }
 
 - (void)mouseMoved:(NSEvent *)e {
+    wakeAquaTick_();
     NSPoint p = [self sdlPoint:e];
     SDL_Event ev;
     memset(&ev, 0, sizeof(ev));
@@ -266,6 +334,7 @@ static Uint16 keyModFromFlags_(unsigned long f);
 
 - (void)mouseDragged:(NSEvent *)e { [self mouseMoved:e]; }
 - (void)scrollWheel:(NSEvent *)e {
+    wakeAquaTick_();
     NSPoint p = [self sdlPoint:e];
     const int scale = canvasScale_canvas();
     SDL_Event ev;
@@ -328,6 +397,7 @@ static Uint16 keyModFromFlags_(unsigned long f) {
 }
 
 - (void)keyDown:(NSEvent *)e {
+    wakeAquaTick_();
     int sc = 0;
     const Uint32 sym = keySymFromEvent_(e, &sc);
     const Uint16 mods = keyModFromFlags_([e modifierFlags]);
@@ -354,6 +424,7 @@ static Uint16 keyModFromFlags_(unsigned long f) {
 }
 
 - (void)keyUp:(NSEvent *)e {
+    wakeAquaTick_();
     int sc = 0;
     const Uint32 sym = keySymFromEvent_(e, &sc);
     SDL_Event ev;
@@ -433,7 +504,29 @@ static void presentHookAqua_(int winIndex) {
     (void) winIndex;
     if (!gView_) return;
     captureCanvas_();
-    if (!gCanvasPx_ || gCanvasW_ <= 0 || gCanvasH_ <= 0) return;
+    if (!gCanvasPx_ || gCanvasW_ <= 0 || gCanvasH_ <= 0) {
+        gPresentedThisTick_ = iFalse;
+        return;
+    }
+    gPresentedThisTick_ = iTrue;
+    /* Only issue a redraw if the frame actually differs from the previous one.
+       The widget kit may call SDL_RenderPresent every tick (a re-arming ticker
+       keeps the refresh gate open even at rest), but on a static page the pixels
+       are identical -- a full setNeedsDisplay + synchronous displayIfNeeded
+       (an entire CGContextDrawImage of the canvas) is pure waste on a G4. */
+    const int bytes = gCanvasH_ * gCanvasPitch_;
+    const iBool dirty = !gLastPresented_ || gLastPresentedBytes_ != bytes ||
+                        memcmp(gLastPresented_, gCanvasPx_, (size_t) bytes) != 0;
+    gLastPresentDirty_ = dirty;
+    if (!dirty) {
+        return;
+    }
+    if (!gLastPresented_ || gLastPresentedBytes_ != bytes) {
+        free(gLastPresented_);
+        gLastPresented_ = (Uint8 *) malloc((size_t) bytes);
+        gLastPresentedBytes_ = bytes;
+    }
+    memcpy(gLastPresented_, gCanvasPx_, (size_t) bytes);
     [gView_ setNeedsDisplay:YES];
     [gView_ displayIfNeeded];
 }
@@ -483,6 +576,7 @@ static void cursorHookAqua_(int cursorId, void *unused) {
 @implementation AquaAppDelegate
 - (void)windowWillClose:(NSNotification *)n { (void) n; [self quitRequested]; }
 - (void)quitRequested {
+    wakeAquaTick_();
     SDL_Event ev;
     memset(&ev, 0, sizeof(ev));
     ev.quit.type = SDL_QUIT;
@@ -504,19 +598,50 @@ static void cursorHookAqua_(int cursorId, void *unused) {
 
 - (void)tick:(NSTimer *)timer {
     (void) timer;
+    if (gPendingTimer_) {           /* the fired one-shot is spent */
+        [gPendingTimer_ release];
+        gPendingTimer_ = nil;
+    }
+    gInTick_ = iTrue;
     /* Each tick must be an autorelease island: on Tiger AppKit does not provide
        an automatic pool for every run-loop event, and step_App drives the widget
        kit (event dispatch + render + present + autolayout) which autoreleases a
        steady stream of Foundation/AppKit objects.  Without a per-frame pool they
        hit _NSAutoreleaseNoPool and never release. */
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    gPresentedThisTick_ = iFalse;
+    gLastPresentDirty_ = iFalse;
     step_App(postedEventsOnly_AppEventMode);
     /* The widget kit may have quit (isRunning = false) on SDL_QUIT / a "quit"
        command; unwind AppKit's loop so the process actually exits. */
     if (!isAppRunning()) {
         [[NSApplication sharedApplication] terminate:nil];
+        [pool drain];
+        gInTick_ = iFalse;
+        return;
     }
+    /* Coalesce: park to the slow interval once the scene has been static for a
+       couple of frames (either nothing was presented, or it matched the prior
+       frame), and stay at 60Hz while frames are actually changing or a native
+       event needs prompt service.  This is the backend half of the idle-CPU fix;
+       the widget kit may still be ticking a re-armed animation, but if it draws
+       identical pixels we stop paying for it.  (The tick always calls step_App
+       even when parked, so queued SDL events -- network completions, posted
+       commands -- are still drained at the slow rate and any resulting change
+       immediately bumps us back to 60Hz.) */
+    if (gPresentedThisTick_ && gLastPresentDirty_) {
+        gIdleStreak_ = 0;         /* a real rendering change: stay fast */
+    }
+    else if (!gNeedFast_) {
+        gIdleStreak_++;
+    }
+    const NSTimeInterval next =
+        (gNeedFast_ || gIdleStreak_ < kIdleStreak_Aqua) ? kFastInterval_Aqua
+                                                        : kIdleInterval_Aqua;
+    gNeedFast_ = iFalse;
     [pool drain];
+    gInTick_ = iFalse;
+    armAquaTick_(next);
 }
 @end
 
@@ -541,6 +666,7 @@ static void cursorHookAqua_(int cursorId, void *unused) {
     if (!url || [url length] == 0) {
         return;
     }
+    wakeAquaTick_();
     iString *str = newCStr_String([url cStringUsingEncoding:NSUTF8StringEncoding]);
     str = urlDecodeExclude_String(collect_String(str), "/#?:");
     postCommandf_App("~open newtab:1 url:%s", cstr_String(str));
@@ -577,11 +703,8 @@ void runAquaMainLoop(void) {
     if (!timerTarget) {
         timerTarget = [[AquaWidgetTimer alloc] init];
     }
-    [NSTimer scheduledTimerWithTimeInterval:1.0 / 60.0
-                                     target:timerTarget
-                                   selector:@selector(tick:)
-                                   userInfo:nil
-                                    repeats:YES];
+    gTimerTarget_ = timerTarget;
+    armAquaTick_(kFastInterval_Aqua);
     {
         const char *st = getenv("AQUA_SELFTEST");
         if (st && sscanf(st, "%d,%d", &gSelfTestX_, &gSelfTestY_) == 2) {
@@ -644,6 +767,9 @@ int initAquaView_app(int width, int height) {
 }
 
 void deinitAquaView_app(void) {
+    invalidateAquaTick_();
+    gTimerTarget_ = nil; /* not owned here: the static AquaWidgetTimer owns it */
+    if (gLastPresented_) { free(gLastPresented_); gLastPresented_ = NULL; gLastPresentedBytes_ = 0; }
     if (gView_) { [gView_ release]; gView_ = nil; }
     if (gWin_)  { [gWin_ release];  gWin_  = nil; }
     if (gDelegate_) { [gDelegate_ release]; gDelegate_ = nil; }

@@ -103,6 +103,81 @@ cmdline) between runs.
 
 ## In-flight
 
+0. **UP-PRIO: T-tier perf profiling + idle-CPU fix on tiger (2026-09-11).**
+   L4 idles at **~25% (measured 23-30%) CPU on petal's G4 doing nothing** —
+   a full-window 60Hz rerender that shouldn't happen. On-device `sample` is
+   decisive: in a 5s capture **291/312 timer ticks call `step_App`, of which
+   286 hit `refresh_App` → `draw_MainWindow`** (154 `SDL_RenderPresent` =
+   full-canvas blit → `CGContextDrawImage`, 105 `drawRoot_Widget` =
+   widget-tree re-render); only 5/312 process events. The app redraws the
+   whole document ~55×/s at idle. **Root cause (traced to the portable core,
+   not the backend):** `refresh_App`'s draw gate (app.c:2989/2993) only opens
+   when `pendingRefresh`/`isRefreshPending` is set, and the only setter is
+   `postRefresh_Window` (app.c:3161) — invoked from `refresh_Widget`
+   (widget.c:2743) **and** from `addTicker_App` itself (app.c:3383/3389). So
+   any ticker that re-registers every frame keeps the gate open. Prime
+   suspect: `animate_DocumentWidget` (documentwidget.c:697-709) re-arms itself
+   while `swipeView` is live or `linkInfo`/`sideOpacity`/`altTextOpacity` anim
+   is unfinished. (Ruled out: `input.blink` — gated by `selected_WidgetFlag`
+   so it does NOT fire without editing input, and it's 500ms anyway, not 60Hz.)
+   **Why it's not "just slower SDL" — it's the model.** The real SDL2 host
+   runs `run_App_` (app.c:2912) → `step_App(waitForNewEvents_AppEventMode)`,
+   which *blocks* in `nextEvent_App_` (app.c:2308) `SDL_WaitEvent` — the loop
+   sleeps at ~0% CPU until an event arrives, and `isWaitingAllowed_App_`
+   (app.c:2278) still draws first if a refresh is pending. The Aqua host can't
+   block the main thread (`[NSApp run]` owns it), so `aquaview.m` substitutes a
+   free-running ~60Hz `NSTimer` → `step_App(postedEventsOnly_AppEventMode)`
+   (`SDL_PollEvent`, app.c:2344 — a busy poll). So `step_App` runs 60×/s, and
+   the re-arming ticker guarantees `refresh_App`'s gate is open most ticks →
+   `draw_MainWindow` on ~286/312. Two independent causes: the poll-when-idle
+   model **and** a ticker that never lets the scene go quiet.
+   **Fix levers (both needed):** (1) portable core — stop the ticker
+   self-re-arm when content is static (fix the `animate_DocumentWidget` OR
+   condition / make the anims actually reach `isFinished_Anim` at rest, and
+   don't have `addTicker_App` unconditionally post a refresh); (2) Aqua
+   backend — make the tick block/coalesce instead of busy-poll (an
+   `SDL_WaitEventTimeout`-style short dequeue so the timer parks when idle,
+   matching SDL's block-on-event semantics), and gate
+   `presentHookAqua_` (aquaview.m:437-438) so a full `setNeedsDisplay` +
+   synchronous `displayIfNeeded` blit only happens when a region was actually
+   dirtied. On a G4 the 154 `SDL_RenderPresent` full-frame copies dominate.
+   **DECISION: do NOT move the render to another thread (2026-09-11).** petal
+   is a single-core G4 (`sysctl hw.ncpu` = 1), so off-threading the current
+   render would only relocate the same wasted work and add cross-thread state
+   sync + an extra framebuffer copy — more CPU, more complexity, ~0 win.
+   Threaded shaping/rasterization is a legit *latency* optimization for a
+   1-core machine (pipeline two frames, worker does the heavy text shaping,
+   double-buffer + semaphore), but (a) the widget kit is not written to draw
+   off the main thread (`step_App` mutates the widget tree during draw, so it
+   needs a real off-main-thread-draw rework), and (b) it wouldn't reduce idle
+   CPU — the waste is in the loop model, not the shaping cost. Fix the idle
+   redraw first (levers 1+2); revisit threading only if interactive latency is
+   still bad. Evidence: `sample 3448` on petal (`l4-perf-sample-2026-09-11.txt`)
+   + `ps` CPU. **Lever 2 (Aqua backend, 2026-09-11) now implemented in
+   `aquaview.m`:** (a) the free-running 60Hz repeating nil-target timer is
+   replaced by a self-rescheduling one-shot that **coalesces** — it parks to a
+   0.25s interval once the scene is static for a couple of frames, and returns
+   to 60Hz the moment a real change (dirty frame) or a native input event
+   (mouse/key/scroll/URL/quit, via `wakeAquaTick_`) needs prompt service; (b)
+   `presentHookAqua_` is **dirty-gated** — `setNeedsDisplay` + the synchronous
+   `displayIfNeeded` (a full-canvas `CGContextDrawImage`) only runs when the
+   shim framebuffer actually differs (memcmp) from the last presented frame, so
+   a re-arming widget ticker that redraws identical pixels no longer blits
+   55×/s. The tick still always calls `step_App` when it runs, so queued SDL
+   events/commands (network completions) are drained at the slow rate and any
+   resulting change immediately bumps back to 60Hz. Cross-syntax-checked with
+   the real darwin8 PPC gcc (exit 0, no new warnings) **and the full L4.app
+   cross-build + deploy to petal ran clean (2026-09-11)**: on-device settled
+   idle CPU is now **~0.2–0.4%** (was 23–30%; the 60% transient during the
+   active fetch/render drops once the page settles) — the window renders the
+   live `git.skyjake.fi/lagrange/release/tags/` page correctly and there are
+   **0 double-free errors**. One new on-device fix: the self-rescheduling timer
+   needed a `retain` (`timerWithTimeInterval:` returns +0 autoreleased; holding
+   it in `gPendingTimer_` and releasing as if owned caused a malloc double-free
+   flood, now fixed in `armAquaTick_`). **Lever 1 (portable core ticker re-arm)
+   is still open** — deferred per 2026-09-11; the idle-CPU problem appears
+   resolved by the backend alone, so lever 2 is now the priority and lever 1
+   will be revisited only if a real animation/scrolling path still misbehaves.
 1. **Aqua canvas host — cross-build DONE, archive blocker RESOLVED, and the
    **T-tier app now RUNS on real Tiger hardware** (2026-09-10).** The T-tier
    product is named **L4** ("a Lagrange point for 10.4"), replacing the
