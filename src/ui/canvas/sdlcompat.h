@@ -1031,7 +1031,28 @@ Uint64 presentCount_canvas(void);
 void captureRender_canvas(SDL_Renderer *, const char *path);
 int windowCount_canvas(void);
 SDL_Renderer *rendererOfWindow_canvas(int index);
-void setPresentHook_canvas(void (*cb)(int winIndex), void *unused);
+/* The present hook's int arg is the *windowID* of the window whose renderer just
+   presented (see the multi-window notes below). */
+void setPresentHook_canvas(void (*cb)(int winID), void *unused);
 void setPumpHook_canvas(void (*cb)(void), void *unused);
 void setCursorHook_canvas(void (*cb)(int cursorId, void *unused), void *unused);
 const Uint8 *canvasPixels_canvas(int winIndex, int *w, int *h, int *pitch);
+
+/* Multi-window plumbing.  A backend (Aqua/Toolbox) that presents more than
+   window index 0 needs to be told when the widget kit creates/destroys shim
+   windows so it can create/close a matching native window, and when a title is
+   set so the native title bar tracks the app.  CreatedHook receives the shim
+   SDL_Window* (read its id/size); the destroyed/title hooks receive the shim
+   window's windowID (SDL_WindowID); the present hook's int argument carries the
+   *windowID* of the window whose renderer just presented (not an array index --
+   indices are unstable because popup/menu windows share the table and destroy
+   swaps entries).  A backend keys its own window table by windowID so it never
+   depends on the shim's internal ordering.  It should ignore popup/menu windows
+   (SDL_WINDOW_POPUP_MENU / SDL_WINDOW_SKIP_TASKBAR), which are in-canvas. */
+void setWindowCreatedHook_canvas(void (*cb)(SDL_Window *win), void *unused);
+void setWindowDestroyedHook_canvas(void (*cb)(Uint32 winID), void *unused);
+void setWindowTitleHook_canvas(void (*cb)(Uint32 winID, const char *title), void *unused);
+
+/* Renderer pixels for a specific window, looked up by windowID (the key the
+   hooks/present use).  Falls back to index 0 only if there is no such window. */
+const Uint8 *canvasPixelsByWindowId_canvas(Uint32 winID, int *w, int *h, int *pitch);

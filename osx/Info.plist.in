@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key><string>L4</string>
+    <key>CFBundleIdentifier</key><string>org.lagrange.l4</string>
+    <key>CFBundleName</key><string>L4</string>
+    <key>CFBundleDisplayName</key><string>L4</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleSignature</key><string>Lgrn</string>
+    <key>CFBundleIconFile</key><string>lagrange</string>
+    <key>CFBundleVersion</key><string>@AQUA_BUILD@</string>
+    <key>CFBundleShortVersionString</key><string>@AQUA_VERSION_PREFIX@</string>
+    <key>NSHumanReadableCopyright</key><string>@AQUA_COPYRIGHT@</string>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>LSEnvironment</key>
+    <dict>
+        <key>AQUA_DEBUG</key><string>1</string>
+    </dict>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>Gemini URL</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>gemini</string>
+                <string>gopher</string>
+                <string>gophers</string>
+                <string>spartan</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

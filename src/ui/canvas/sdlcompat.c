@@ -66,8 +66,11 @@ static int g_lastCursorId = -1;
 
 static int g_userEventBase = -1;
 static int g_canvasScale = 1;
-static void (*presentHook_)(int);
+static void (*presentHook_)(int); /* arg = the presenting window's windowID */
 static void (*pumpHook_)(void);
+static void (*windowCreatedHook_)(SDL_Window *);
+static void (*windowDestroyedHook_)(Uint32);
+static void (*windowTitleHook_)(Uint32, const char *);
 static int g_userEventsUsed;
 static SDL_TimerID g_nextTimerId;
 
@@ -556,6 +559,9 @@ SDL_Window *SDL_CreateWindow(const char *title, int x, int y, int w, int h, Uint
     win->flags = SDL_WINDOW_SHOWN | SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_MOUSE_FOCUS;
     snprintf(win->title, sizeof(win->title), "%s", title ? title : "lagrange");
     g_windows[g_numWindows++] = win;
+    if (windowCreatedHook_) {
+        windowCreatedHook_(win);
+    }
     if (getenv("CANVAS_LOG_EVENTS") || getenv("AQUA_MOUSEDBG")) {
         void *bt[8] = {0};
         int n = backtrace(bt, 8);
@@ -570,17 +576,28 @@ SDL_Window *SDL_CreateWindow(const char *title, int x, int y, int w, int h, Uint
 
 void SDL_DestroyWindow(SDL_Window *window) {
     if (!window) return;
+    const Uint32 winID = window->id;
+    int idx = -1;
     for (int i = 0; i < g_numWindows; i++) {
         if (g_windows[i] == window) {
-            g_windows[i] = g_windows[--g_numWindows];
+            idx = i;
             break;
         }
+    }
+    if (idx >= 0) {
+        /* swap-last-into-place */
+        g_windows[idx] = g_windows[--g_numWindows];
     }
     if (window->renderer) {
         free(window->renderer->canvas);
         free(window->renderer);
     }
     free(window);
+    /* Notify by windowID: the backend keys its own native-window table by id, so
+       internal reordering never desyncs it (popup/menu windows share the table). */
+    if (windowDestroyedHook_) {
+        windowDestroyedHook_(winID);
+    }
 }
 
 SDL_WindowID SDL_GetWindowID(SDL_Window *win) { return win ? win->id : 0; }
@@ -590,7 +607,10 @@ Uint32 SDL_GetWindowFlags(SDL_Window *win) {
 }
 
 void SDL_SetWindowTitle(SDL_Window *win, const char *title) {
-    (void) win; (void) title;
+    if (win) {
+        snprintf(win->title, sizeof(win->title), "%s", title ? title : "");
+        if (windowTitleHook_) windowTitleHook_(win->id, win->title);
+    }
 }
 
 void SDL_GetWindowSize(SDL_Window *win, int *w, int *h) {
@@ -706,6 +726,7 @@ SDL_Renderer *SDL_CreateRenderer(SDL_Window *win, int index, Uint32 flags) {
     if (!win) return NULL;
     if (win->renderer) return win->renderer;
     SDL_Renderer *d = calloc(1, sizeof(SDL_Renderer));
+    d->window = win; /* SDL_RenderPresent maps the presenting window via this */
     d->w = win->w * g_canvasScale;
     d->h = win->h * g_canvasScale;
     d->canvas = calloc(1, (size_t) d->w * d->h * 4);
@@ -1025,9 +1046,15 @@ int SDL_RenderCopy(SDL_Renderer *r, SDL_Texture *texture, const SDL_Rect *srcIn,
 }
 
 int SDL_RenderPresent(SDL_Renderer *r) {
-    (void) r;
     g_presentCount++;
-    if (presentHook_) presentHook_(0);
+    /* Present the window this renderer belongs to, not hardcoded index 0: a
+       multi-window backend needs to blit each shim window to its own native
+       window.  Pass the windowID (the key the backend's own table uses), not an
+       array index -- indices are unstable (popup/menu windows share the table
+       and destroy swaps entries). */
+    if (presentHook_) {
+        presentHook_(r && r->window ? (int) r->window->id : 0);
+    }
     return 0;
 }
 
@@ -1454,6 +1481,21 @@ void setPumpHook_canvas(void (*cb)(void), void *unused) {
     (void) unused;
 }
 
+void setWindowCreatedHook_canvas(void (*cb)(SDL_Window *win), void *unused) {
+    windowCreatedHook_ = cb;
+    (void) unused;
+}
+
+void setWindowDestroyedHook_canvas(void (*cb)(Uint32 winID), void *unused) {
+    windowDestroyedHook_ = cb;
+    (void) unused;
+}
+
+void setWindowTitleHook_canvas(void (*cb)(Uint32 winID, const char *title), void *unused) {
+    windowTitleHook_ = cb;
+    (void) unused;
+}
+
 const Uint8 *canvasPixels_canvas(int winIndex, int *w, int *h, int *pitch) {
     SDL_Renderer *r = rendererOfWindow_canvas(winIndex);
     if (!r) return NULL;
@@ -1461,4 +1503,14 @@ const Uint8 *canvasPixels_canvas(int winIndex, int *w, int *h, int *pitch) {
     if (h) *h = r->h;
     if (pitch) *pitch = r->canvasPitch;
     return r->canvas;
+}
+
+const Uint8 *canvasPixelsByWindowId_canvas(Uint32 winID, int *w, int *h, int *pitch) {
+    if (winID == 0) return canvasPixels_canvas(0, w, h, pitch);
+    for (int i = 0; i < g_numWindows; i++) {
+        if (g_windows[i]->id == winID) {
+            return canvasPixels_canvas(i, w, h, pitch);
+        }
+    }
+    return NULL;
 }

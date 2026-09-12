@@ -310,6 +310,20 @@ execute_process (
 # Where the app finds resources.lgr at runtime (baked into LAGRANGE_EMB_BIN).
 set (AQUA_EMB_BIN "resources.lgr" CACHE STRING
     "resources.lgr path baked into the Aqua host (absolute for a deployed .app)")
+# Bundle identity for the native About panel: CFBundleName, version + copyright.
+# The standard panel renders "Version <short> (<build>)"; keep the dev flavour in
+# the short string and the HEAD short hash as the build so the About shows
+# "Version 1.21.1-dev+L4-tiger (<sha>)" like the about:lagrange page.
+set (AQUA_VERSION_PREFIX "1.21.1-dev+L4-tiger")
+set (AQUA_BUILD "${LAG_DEV_GIT_SHA}")
+if (NOT AQUA_BUILD)
+    set (AQUA_BUILD "0")
+endif ()
+set (AQUA_RENDER_NAME "Aqua")
+set (AQUA_COPYRIGHT "by jk@skyjake.fi
+Powered by ${AQUA_RENDER_NAME}, mbedTLS, and ☕")
+configure_file (${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in
+                ${CMAKE_CURRENT_BINARY_DIR}/Info.plist @ONLY)
 add_executable (L4 ${AQUA_SOURCES})
 set_property (TARGET L4 PROPERTY C_STANDARD 11)
 set_property (TARGET L4 PROPERTY C_STANDARD_REQUIRED ON)
@@ -321,6 +335,11 @@ target_compile_definitions (L4 PRIVATE
     # dev-build identity (AGENTS.md version-string policy)
     "LAGRANGE_APP_VERSION=\"1.21.1-dev+L4-tiger (${LAG_DEV_GIT_SHA})\""
     LAGRANGE_CANVAS=1
+    # Aqua host runs multi-window (each shim window gets a native NSWindow), so
+    # app.c's LAGRANGE_AQUA branch enables the detached Preferences window and
+    # any other per-window behaviour the single-framebuffer canvas hosts don't.
+    LAGRANGE_AQUA=1
+    "LAGRANGE_RENDER_NAME=\"Aqua\""
     # Native AppKit NSMenu bar (src/macos/canvasmenu_impl_aqua.m).  The Aqua host
     # runs [NSApp run] (aquaview.m) so the native bar renders; the widget kit
     # builds it via window.c insertMacMenus_ and stops drawing the in-window
@@ -387,8 +406,15 @@ if (NOT EXISTS ${AQUA_RESOURCES})
 endif ()
 add_custom_command (TARGET L4 POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory ${AQUA_BUNDLE}/Contents/MacOS
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${AQUA_BUNDLE}/Contents/Resources
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/Info.plist
             ${AQUA_BUNDLE}/Contents/Info.plist
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/../res/Lagrange.icns
+            ${AQUA_BUNDLE}/Contents/Resources/lagrange.icns
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_CURRENT_SOURCE_DIR}/../res/lagrange-64.png
+            ${AQUA_BUNDLE}/Contents/Resources/lagrange-64.png
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/PkgInfo
             ${AQUA_BUNDLE}/Contents/PkgInfo
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:L4>

@@ -490,10 +490,10 @@ static void ensureAppMenu_(void) {
         g_appleMenuSet_ = YES;
     }
     if (appSubmenu && [appSubmenu numberOfItems] == 0) {
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"About Lagrange"
-                                                      action:@selector(post:)
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"About L4"
+                                                      action:@selector(orderFrontStandardAboutPanel:)
                                                keyEquivalent:@""];
-        [item setTarget:postingTarget_("!open newtab:1 switch:1 url:about:lagrange")];
+        [item setTarget:[NSApplication sharedApplication]];
         [appSubmenu addItem:item];
         [item release];
         [appSubmenu addItem:[NSMenuItem separatorItem]];

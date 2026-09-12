@@ -47,6 +47,15 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 
 #include <SDL_timer.h>
 
+/* Renderer name for the "Powered by" line on the lagrange about page.  SDL
+   builds leave this undefined (SDL 2 stays); other renderers name themselves
+   here, falling back to the terminal text renderer on terminal builds. */
+#ifndef LAGRANGE_RENDER_NAME
+#   if defined (iPlatformTerminal)
+#       define LAGRANGE_RENDER_NAME "ncurses"
+#   endif
+#endif
+
 iDefineTypeConstruction(GmResponse)
 
 void init_GmResponse(iGmResponse *d) {
@@ -935,9 +944,9 @@ static void aboutRequest_GmRequest_(iGmRequest *d) {
             iString body;
             initBlock_String(&body, &resp->body);
             replace_String(&body, "OpenSSL", libraryName_TlsRequest());
-            if (isTerminal_Platform()) {
-                replace_String(&body, "SDL 2", "ncurses");
-            }
+#if defined (LAGRANGE_RENDER_NAME)
+            replace_String(&body, "SDL 2", LAGRANGE_RENDER_NAME);
+#endif
             set_Block(&resp->body, utf8_String(&body));
             deinit_String(&body);
         }

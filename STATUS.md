@@ -103,7 +103,78 @@ cmdline) between runs.
 
 ## In-flight
 
-0. **UP-PRIO: T-tier perf profiling + idle-CPU fix on tiger (2026-09-11).**
+0. **Multiple windows for L4 on Tiger (2026-09-11) — cross-built + on-device
+   verified; a close-path crash found and fixed on device.** The Aqua host was
+   effectively single-window: it presented only shim window index 0 AND tagged
+   every Aqua mouse event with `g_windows[0]->id`, so an extra window (Cmd+N →
+   `newExtra_Window`) never got its own native window or input routing.  Fixed
+   end-to-end:
+   **Shim (`sdlcompat.c/.h`)** —    (a) `SDL_RenderPresent` now calls
+   `presentHook_` with the **presenting window's windowID** (not hardcoded 0;
+   not an array index — indices unstable because popup/menu windows share
+   `g_windows` and `SDL_DestroyWindow` swaps-last-into-place); (b) new
+   `setWindow{created,destroyed,title}Hook_canvas`; (c) new
+   `canvasPixelsByWindowId_canvas`.  **Rendering regression found on device
+   and fixed:** `SDL_CreateRenderer` never assigned `renderer->window`, so
+   `r->window->id` was `0` and every present landed on `aqFind_(0)` → −1 → no
+   blit → black window (title bar still set via the title hook).  Added
+   `d->window = win; (sdlcompat.c)`.  **Aqua host (`aquaview.m`)** — one
+   `NSWindow`+`AquaCanvasView` per shim window, keyed by windowID in a compact
+   table; mouse/key/scroll/text events tagged with the originating window's
+   shim id; `becomeKey/resignKeyWindow` post
+   `SDL_WINDOWEVENT_FOCUS_{GAINED,LOST}`; title hook updates the native title
+   bar; per-window dirty-gate preserves the idle-CPU fix; popup/dropdown
+   windows (`SDL_WINDOW_POPUP_MENU`/`SKIP_TASKBAR`) carry **no** native
+   window.  Primary-window close still quits; closing an extra window posts
+   `SDL_WINDOWEVENT_CLOSE`.
+   **Crash found on device (2026-09-11):** `windowDestroyedAqua_` called
+   `[win close]`, which re-entered the `windowWillClose:` delegate and (for the
+   primary window) `quitRequested` → `[NSApp terminate:]` from inside the
+   timer-tick frame that was tearing down the window model — a double release
+   (`EXC_BAD_ACCESS` in `objc_msgSend`, crash log `L4.crash.log`, `delete_MainWindow`
+   → `windowDestroyedAqua_`).  Fixed by using `[win orderOut:]` (no
+   `windowWillClose:` re-entry) + clearing the freed table slot so a stale
+   lookup can't re-hit a released object.  **Verified on petal:** clean
+   single-window start (cleared stale `state.lgr` — a 12-window pile-up from
+   the pre-fix crash era, not a feature bug) → File ▸ New Window → 2 distinct
+   windows (separate titles) → Close Tab → back to 1, **no crash**; close of
+   the primary main    window (the delete_MainWindow path that crashed) → **no new
+   crash** (app exits cleanly after the last window).  After the
+   renderer-window fix, both windows render full page content
+   (`l4-multiwin-render-2026-09-11.png`).  Evidence:
+   `~/classic/petal/logs/l4-multiwin-two-2026-09-11.png` +
+   `l4-multiwin-2026-09-11.png` + `l4-render-fixed-2026-09-11.png` +
+   `l4-multiwin-render-2026-09-11.png`.  Open concern: `setActiveWindow_App` is
+   only driven by *extra*-window focus events (window.c `FOCUS_GAINED` returns
+   iFalse for main windows) — confirm on device that focusing back the primary
+   window routes input correctly.
+
+1. **L4 ▸ About as a native dialog + detached Preferences window (2026-09-12).**
+   **About:** the app menu's "About Lagrange" item no longer posts
+   `!open ... url:about:lagrange` (a page tab); it targets the Aqua app
+   delegate's `showAboutDlg:` (`canvasmenu_impl_aqua.m` + `aquaview.m`), which
+   shows a small native "About lagrange" window with the dev version string
+   (`LAGRANGE_APP_VERSION`, e.g. "Version 1.21.1-dev+L4-tiger (sha)") and
+   author — the real macOS menu behaviour.  Verified on petal:
+   `l4-about-dialog-2026-09-12.png`.  **Preferences:** was forced in-window by
+   `app.c` under `LAGRANGE_CANVAS` ("a detached window would be invisible").
+   Now gated on `LAGRANGE_AQUA` (osx L4 `target_compile_definitions`), so the
+   knobs/prefs dialog is promoted to its own **extra window** via
+   `promoteDialogToWindow_Widget` (which `newExtra_Window`s it — natively
+   rendered by the multi-window Aqua host).  **Second close-path crash found +
+   fixed on device:** closing the detached Preferences window (title-bar close
+   button) crashed `windowDestroyedAqua_` (objc_msgSend on a freed window). 
+   Root cause: the shim `AquaWindow`s default to `releasedWhenClosed` **YES**, so
+   AppKit deallocates the window on a user close *before* the next-tick shim
+   destroy — the destroy hook messages a freed NSWindow/NSView.  Fix:
+   `[aq setReleasedWhenClosed:NO]` on every backend-created window (holds it
+   until the destroy hook's one balanced `release`; same pattern as the About
+   window).  Verified on device: About opens (no crash), New Window + Window ▸
+   Close Window work, no new crash.  ⚠️ The exact *prefs close-button* path could
+   NOT be driven over AX on petal (System Events close-button/Preferences clicks
+   time out — NSReceiverEvaluationScriptError 4; a separate L4 main-thread AX
+   responsiveness concern worth a look) — **needs a real mouse close of the
+   Preferences window to confirm the fix.**
    L4 idles at **~25% (measured 23-30%) CPU on petal's G4 doing nothing** —
    a full-window 60Hz rerender that shouldn't happen. On-device `sample` is
    decisive: in a 5s capture **291/312 timer ticks call `step_App`, of which

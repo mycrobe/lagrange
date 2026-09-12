@@ -699,6 +699,74 @@ adds a few more:
   target with `NDEBUG` like the host canvas Release gate.
 - **10.4u SDK has no `<execinfo.h>`** (`sdlcompat.c` backtrace path) — shim it
   (`osx/darwin8_sdk_shim/execinfo.h`, frame-pointer walk over r30).
+- **Multi-window: present/created/destroyed/title hooks key by `SDL_WindowID`,
+  NEVER by array index (2026-09-11).** `sdlcompat.c`'s `g_windows[]` includes
+  the widget kit's popup/menu windows (`newPopup_Window` → `SDL_CreateWindow`)
+  and `SDL_DestroyWindow` swaps-last-into-place on remove — so an index is
+  unstable.  **And `SDL_CreateRenderer` must set `renderer->window = win`** —
+  it never did, so `SDL_RenderPresent`'s `r->window->id` was `0` and every
+  present landed on the backend's id lookup at `0` → −1 → no blit → a black
+  window (chrome + title still render via the title hook, hiding the failure).
+  The present hook int arg, `setWindowDestroyedHook_` and `setWindowTitleHook_`
+  therefore carry the presenting/affected window's
+  *windowID*; `canvasPixelsByWindowId_canvas` resolves pixels by id.  The Aqua
+  host keys its native-window table by id (`gAqTable`).  **Popup/dropdown
+  windows carry no native window** — the Aqua host skips
+  `SDL_WINDOW_POPUP_MENU`/`SDL_WINDOW_SKIP_TASKBAR` windows (this host renders
+  the top/context menus natively via `canvasmenu_impl_aqua.m`, so a widget-kit
+  dropdown is in-canvas and must not become a separate floating NSWindow).
+- **Native window close ≠ app quit once there are extra windows.** The Aqua
+  host kept "close the window → SDL_QUIT + `[NSApp terminate:]`".  With extra
+  windows that's wrong: clicking an *extra* window's title-bar button should
+  just close it.  `windowWillClose:` now: primary (first native window,
+  `gAqTable[0]`) → quit; any other → `SDL_WINDOWEVENT_CLOSE` so the widget kit
+   runs `closeWindow_App` → `SDL_DestroyWindow` → the destroy hook tears the
+   NSWindow down.  The backend holds a +1 on each NSWindow from creation and
+   releases exactly once in the destroy hook.  **Do NOT call `[NSWindow close]`
+   from the destroy hook — `close:` fires the `windowWillClose:` delegate
+   synchronously**, which re-enters the AquaAppDelegate; for the primary window
+   that calls `quitRequested` → `[NSApp terminate:]` from right inside the
+   timer-tick frame that is tearing down the window model → a double release
+   (`EXC_BAD_ACCESS` in `objc_msgSend`, `L4.crash.log`, `delete_MainWindow` →
+   `windowDestroyedAqua_`).  Use `[NSWindow orderOut:]` (removes it from screen,
+   no delegate notification) + the one balanced `release`; clear the freed table
+   slot so a stale id lookup can't re-hit a released object.  **2026-09-11,
+   found + fixed on-device.**
+- **Every native window the backend creates must be `[setReleasedWhenClosed:NO]`
+  (2026-09-12).** With the default YES, closing a window *via its title-bar close
+  button* makes AppKit deallocate it; the shim's destroy hook then runs later (on
+  the next tick, when the queued `SDL_WINDOWEVENT_CLOSE` is processed) and
+  messages the freed NSWindow/NSView — `EXC_BAD_ACCESS` in
+  `windowDestroyedAqua_` (`delete_Window` → shim destroy path).  A backend-held
+  +1 is NOT sufficient to keep it alive here.  `releasedWhenClosed:NO` holds the
+  window until the destroy hook's one balanced `release`.  This is why the
+  detached **Preferences** window (promoted to an extra window via
+  `LAGRANGE_AQUA` + `promoteDialogToWindow_Widget`) crashed when the user closed
+  it.  **2026-09-12.**
+- **`\uXXXX` escapes inside Objective-C `@""` literals are garbled by the
+   Retro68/10.4u GCC toolchain** (mojibake for a non-ASCII glyph).  To embed a
+   non-ASCII char in a string, build it UTF-8-aware: `<NSString
+   stringWithUTF8String:">` with the raw bytes, e.g. coffee U+2615
+    `"Powered by Aqua, mbedTLS, and \xE2\x98\x95"`.  **2026-09-12**, About dialog.
+- **Tiger `.icns` must contain ONLY PNG entries `ic07`/`ic08`/`ic09`** (128/256/512).
+  `iconutil` emits `ic12`/`ic13`/`icp4`/`icp5`/`icp6`, any of which makes Tiger reject
+  the whole file; a hand-built `ic04`/`ic05`/`8mask` classic bitmap is also unreadable
+  (`8mask` is even a 5-byte type -- invalid).  A PNG-only `icns` (no classic entries)
+  decodes on Tiger (`NSImage` → `reps=3`).  Build recipe: resize `res/lagrange-256.png`
+  → 128/256/512 PNGs, wrap them as `icns`+`[type,len,data]`.  All lagrange icon sources
+  now have `res/*.icns` this way.
+- **Tiger's `orderFrontStandardAboutPanel` NEVER shows the app icon** even with a
+  decodeable, LaunchServices-registered `.icns` (`/Applications` + `lsregister -f`).
+  It resolves the icon from the registered bundle, and an unregistered/GUI-bundle
+  path yields none; `[NSApp setApplicationIconImage:]` drives the **dock** but is
+  ignored by the About panel.  The lagrange About panel is therefore kept native
+  WITHOUT an icon (2026-09-12); the dock icon works via `setApplicationIconImage:`
+  (built from the bundled `lagrange-64.png` with stb_image → `NSBitmapImageRep`).
+- **The canvas host is multi-window now, so `app.c` gates `detachedPrefs` on
+  `LAGRANGE_AQUA`** (added to the osx L4 `target_compile_definitions`): a
+  detached Preferences window is visible + focusable.  The other `LAGRANGE_CANVAS`
+  hosts (sdlview/headless) still keep it in-window, because a detached window
+  there would be invisible (single-framebuffer present) → the app appears frozen.
 
 ## Classic (OS 9) runtime — QuickDraw / events / files
 

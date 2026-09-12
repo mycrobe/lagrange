@@ -1580,7 +1580,11 @@ static void init_App_(iApp *d, int argc, char **argv) {
     }
 #endif
     init_Prefs(&d->prefs);
-#if defined (LAGRANGE_CANVAS)
+#if defined (LAGRANGE_AQUA)
+    /* The Aqua host presents extra windows natively (multi-window), so a
+       detached Preferences window is visible + focusable. */
+    d->prefs.detachedPrefs = iTrue;
+#elif defined (LAGRANGE_CANVAS)
     /* The canvas host displays a single framebuffer (the viewer mirrors shim
        window 0); a detached/prefs window would grab focus while staying
        invisible -> the app appears frozen. Keep dialogs as in-window sheets. */
