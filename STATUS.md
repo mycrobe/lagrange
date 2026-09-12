@@ -12,6 +12,19 @@ build systems + the network slice**, which is what this ledger's latest
 milestone covers. Phase order stays **1) host seam → 2) Tiger/Cocoa → 3)
 Classic**, with the cross-build tool systems as the parallel enabling work.
 
+**The M-tier (OS 8/9) port — **L9**, the Classic version of lagrange — has
+started on `classic-mtier` (branch cut from `canvas-shim` 2026-09-12) with
+the network-first slice — the exact mirror of the T-tier `d8_smoke`.** mbedTLS-ppc (cy384 fork) is cross-built into
+lagrange's own `vendor/ClassicNet/deps`, and a new `mac/` CMake project +
+`scripts/build-mac.sh` cross-build the ClassicNet **Open Transport** slice
+(`cn_ot` + `cn_tls` + `cn_mac_time`) + mbedTLS-ppc into `build-mac/cn_ot_smoke.bin`
+(a valid PowerPC PEF console app), proving the M-tier network seam is
+portable to classic Mac OS before any UI. **The on-device OT Gemini fetch is
+now PROVEN on the macos9 guest (2026-09-12):** `cn_ot_smoke` did a real
+Open Transport + TLS 1.2 fetch of `gemini://10.0.2.2:1965/` and got a `20
+text/gemini` capsule (986 bytes, UTF-8 pool) — evidence
+`logs/mtier-fetch-20260912.log` (retrieved via retrieve-log.sh).
+
 **The T-tier fetch/TOFU slice is now evidenced end-to-end on real Tiger
 hardware (2026-09-10).** The reconciled milestone: `L4.app` does a **real
 ClassicNet fetch over the network on petal** (renders a live Gemini page) and
@@ -422,13 +435,35 @@ cmdline) between runs.
    `harfbuzz-retro68`/`fribidi-retro68` into the Classic renderer target
    (`LAGRANGE_ENABLE_HARFBUZZ=1` + `LAGRANGE_ENABLE_FRIBIDI=1`, link
    `libharfbuzz.a`/`libfribidi.a`).
-4. **the_Foundation shim migration** — the darwin8 shims
-   (strnlen/clock_gettime/pthread_setname_np/posix_spawn/AVOID_ANY_THREADS)
-   are build-time local for now (`osx/*`); migrate into the_Foundation's
-   `src/platform/apple.c`/`posix/` behind an OS-version check on the
-   `classicnet-seam` branch so they're reusable by the Retro68/M-tier flavor.
-5. ClassicNet submodule pin: lagrange is at `f1dbf66` (a local `darwin8-transport`
-   commit adding the `[classicnet]` stderr markers — must be pushed for a clean
-   clone). The 6-arg `CN_TlsCreate` stays until starscape's client-cert identity
-   commit (`57ca5db`) lands on origin; then bump + migrate to the 10-arg form
-   as part of the Gemini auth work.
+ 4. **the_Foundation shim migration** — the darwin8 shims
+    (strnlen/clock_gettime/pthread_setname_np/posix_spawn/AVOID_ANY_THREADS)
+    are build-time local for now (`osx/*`); migrate into the_Foundation's
+    `src/platform/apple.c`/`posix/` behind an OS-version check on the
+    `classicnet-seam` branch so they're reusable by the Retro68/M-tier flavor.
+ 5. ClassicNet submodule pin: lagrange is at `f1dbf66` (a local `darwin8-transport`
+    commit adding the `[classicnet]` stderr markers — must be pushed for a clean
+    clone). The 6-arg `CN_TlsCreate` stays until starscape's client-cert identity
+    commit (`57ca5db`) lands on origin; then bump + migrate to the 10-arg form
+    as part of the Gemini auth work.
+ 6. **M-tier network-first slice — PROVEN end-to-end on the macos9 guest
+    (2026-09-12, `classic-mtier`).** The M-tier analog of the T-tier
+    `d8_smoke` is up: `mac/CMakeLists.txt` + `scripts/build-mac.sh`
+    cross-build the vendored ClassicNet OT slice (`cn_ot` Open Transport +
+    `cn_tls` mbedTLS + `cn_mac_time` platform glue) + cy384's mbedTLS-ppc
+    into `build-mac/cn_ot_smoke.bin` (Retro68, valid PPC PEF console app)
+    — clean cross-build. mbedTLS-ppc was built into lagrange's own
+    `vendor/ClassicNet/deps` (previously only present via starscape's copy)
+    via the vendored `setup-mbedtls.sh` PPC step; pinned fork commit
+    `01162ec6`. `cn_ot_smoke.c` drives the CNTransport poll/send/recv vtable
+    over OT with `YieldToAnyThread()` between would-block polls (the OT
+    async notifiers need it) and a TickCount watchdog (45 s), the starscape
+    `gm_session.c` pattern. **On-device: proven** — deployed the `.APPL`
+    (not the `.bin`) to Startup Items with a real creator (`CnOs`) + a SIZE
+    resource, booted the macos9 clone headless, and the app fetched
+    `gemini://10.0.2.2:1965/` over OT+TLS 1.2 → got a `20 text/gemini`
+    capsule (986 bytes, UTF-8 `café/naïve`), logged to the boot root and
+    pulled with retrieve-log.sh → `logs/mtier-fetch-20260912.log`.
+    The LaunchAPPL-stdout route is a dead end here (see arcana); the proven
+    on-device path for a console app is Startup-Items + boot-root log +
+    retrieve-log.sh, and the ONLY reason it can launch at all is the real
+    creator (a `.bin`/`????` deploy → Finder error -199).

@@ -813,6 +813,67 @@ lagrange's OS 9 canvas host lands (Phase M):
 - `xxd -i` names the symbol from the full input path (slashes → `_`)
   and emits no NUL — run it on a bare basename for clean symbols.
 
+### M-tier network-first slice (`cn_ot_smoke`, 2026-09-12)
+
+The Retro68 cross-build of the ClassicNet OT slice (`cn_ot` + `cn_tls` +
+`cn_mac_time` + mbedTLS-ppc) into a `cn_ot_smoke` console .bin is the
+M-tier analog of the T-tier `d8_smoke`. Facts that cost a round:
+
+- **`vendor/ClassicNet/scripts/setup-mbedtls.sh` has a bash line-continuation
+  bug in the PPC step** — a trailing `# comment` after a `\` breaks the
+  chain, so the `cmake --build` never runs (shell prints `command not
+  found`) after a *successful configure*. The workaround is configuring with
+  the full flag set and running `cmake --build` manually (mac/CMakeLists.txt
+  has the exact invocation). The same script's TCP comparison is the one to
+  fix upstream. Do not trust `-DENABLE_TESTING=Off` to survive.
+- **`MBEDTLS_PPC_ROOT` is the mbedTLS SOURCE root, not the build dir** — the
+  include dir is `<root>/include` and the libs are
+  `<root>/build-ppc/library/*.a`. Pinning these separately is easy to get
+  backwards on a first port.
+- **`-I` for the mbedTLS user config must point at `vendor/ClassicNet/target`
+  (not the mbedTLS tree)** or every TU fails `mbedtls_userconfig.h: No such
+  file` — 3rdparty/everest + p256-m build first and are the first to trip.
+- **LaunchAPPL's socket-returned stdout does NOT stream for CONSOLE binaries
+  on the macos9 guest that we can reach** — `LaunchAPPL --emulator tcp`
+  transfers the whole file (port 1984 accepts) then the host client
+  SIGPIPEs (exit 141) with no app stdout, for our `cn_ot_smoke.bin` and a
+  known-good starscape `cntest.bin` alike. The repo's `vm/logs/*` evidence
+  for this guest is entirely screenshots (`qemu-shot.sh`), so the
+  "LaunchAPPL captures stdout" claim in starscape's `test-on-device.sh` has
+  never produced a captured log here. Treat LaunchAPPL-over-darwin8-tcp as
+  unproven on this machine.
+- **To run ANY command-line app on the macos9 guest for evidence, do NOT
+  rely on LaunchAPPLServer** — it is not in the base clone or the bare
+  `macos9.qcow2` (only ever in a disposable clone starscape threw away),
+  and provisioning it is a one-time interactive flow
+  (`vendor/ClassicNet/scripts/build-launchappl-iso.sh` → StuffIt-expand →
+  "OpenTransport TCP" :1984 → Startup Items). The reliable path is
+  **Startup Items + a boot-root log + retrieve-log.sh** (see below).
+- **A CONSOLE app CAN auto-launch from Startup Items — but only with a real
+  creator.** `add_application(... CONSOLE ...)` with NO `CREATOR` stamps
+  creator `????`; deployed as a Startup Item, Finder refuses to launch it
+  with error **-199** ("could not be opened"). Set `CREATOR "CnOs"` (any
+  real 4-char) and the same app launches fine. The `.bin` MacBinary header
+  and the `.APPL` AppleDouble both carry whatever `CREATOR` the build set,
+  so the fix is purely a build flag — deploy via the `.APPL` + `%name.ad`
+  Startup-Items path (starscape's `deploy-qemu.sh`) with that creator.
+- **Console apps need a bigger memory partition than the 1 MB toolchain
+  template** — without a `resource 'SIZE' (-1)` override the guest launches
+  with "not enough memory available". Ship a `cn_ot_smoke.r` SIZE block
+  (mirror starscape's `guest_suite.r` / `gemini.r.in`: prefer 32 MB / min
+  16 MB) and list it in the `add_application` FILES.
+- `smoke_tee` logging to a boot-root file (`FSMakeFSSpec(0,0,...)` +
+  `FSpCreate`/`FSpOpenDF`/`FSWrite`) is the right *capture* design: the app
+  writes `cn_ot_smoke.log`, the VM is stopped, and
+  `~/classic/vm/bin/retrieve-log.sh --vm macos9 cn_ot_smoke.log` pulls it.
+  It only works once the app actually launches (real creator + SIZE).
+- **Deploy clones are disposable and the base clone's Startup Items are
+  empty** — `deploy-qemu.sh` clones `macos9_base.raw`, which carries no
+  Startup-Items apps, overwriting any prior `macos9_test.raw`. If a
+  previous session left a provisioned guest in `macos9_test.raw`, cloning
+  fresh silently destroys it. Keep a provisioned guest as a separate named
+  disk if you want it to survive.
+
 ## Loop / evidence (inherited discipline)
 
 - **See ClassicNet live: `[classicnet]` stderr markers.** ClassicNet logs one
