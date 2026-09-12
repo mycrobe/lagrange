@@ -646,6 +646,92 @@ OS 9 via ClassicNet — do not re-litigate).
   Other optional codecs (WebP/JXL/mpg123/opus/Sparkle) are all `*_FOUND`-gated
   and compile out — M-tier feature trim per the plan, no build.
 
+### the_Foundation on Retro68 (classic Mac) — feasibility + the real port surface
+
+The L9 ("Classic lagrange") next slice is the_Foundation + ClassicNet OT seam
+cross-built for OS 8/9 (the mirror of the darwin8 `d8_tls_smoke`). This is a
+genuine PORT, not the darwin8-style 4-shim affair — darwin8 needed a few
+POSIX shims because Tiger is still POSIX; classic Mac (Retro68) is not.
+
+**Feasibility (verified 2026-09-12):** it DOES configure and is largely
+compilable, because Retro68 ships a real POSIX-compat subset unlike porters
+expect.  Confirmed in `$RETRO68_ROOT/powerpc-apple-macos/include/`:
+
+- **Threads WORK, fully.** Retro68 provides `pthread.h` + `libThreadsLib.a`
+  (backed by the classic Threads manager) WITH the exact functions the_Foundation's
+  `thread.c`/`mutex.c`/condition-variables need: `pthread_create/join/detach/self`,
+  `pthread_mutex_*`, `pthread_cond_*` (incl. `timedwait`/`clockwait`),
+  `pthread_key_*` (tss), `pthread_setname_np` (the 1-arg form thread.c uses), and
+  `pthread_setcanceltype`.  So `iHavePThread` detects truthfully and the seam's
+  `iTlsRequest` worker thread does NOT need a fallback.  (This is why the L9
+  `cn_ot_smoke` already links `ThreadsLib` for `YieldToAnyThread()`.)
+- **Present** (compiles as-is): `unistd.h`, `sys/stat.h`, `sys/types.h`,
+  `sys/time.h`, `fcntl.h`, `sys/wait.h`, `sys/select.h`, `errno.h`, `stdint.h`.
+- **MISSING** (`sys/socket.h`, `netdb.h`, `poll.h`, `dlfcn.h`) — these are the
+  real gaps; the socket/address/datagram/service classes are where the port
+  lives.  `dirent.h` exists but is a stub that `#error`s ("not supported");
+  `sys/dirent.h` errors too.
+
+**Configure recipe (proven):** point the Retro68 toolchain +
+`TFDN_CLASSICNET=ON TFDN_ENABLE_TLSREQUEST=ON TFDN_STATIC_LIBRARY=ON` +
+`TFDN_ENABLE_{TESTS,WEBREQUEST,WARN_ERROR,SSE41,DEBUG_OUTPUT,MUTEX_DEBUG}=OFF`,
+`UNISTRING_DIR=<abs deps/libunistring-retro68>`, `UNISTRING_ICONV=NO`,
+`PCRE2_ROOT`/`ZLIB_ROOT` = the Retro68 static dep trees.  **⚠️ The fork MUST
+absolutize those roots and MUST NOT let host pkg-config resolve the deps** —
+on this box homebrew pkg-config leaks the x86_64 `pcre2`/`zlib` into the PPC
+cross-build (wrong arch at link).  The fork's `Depends.cmake` RetroPPC branch
+sets `*_FOUND`/dirs/lib directly from the roots and forces `CURL_FOUND=NO`,
+`OPENSSL_FOUND=NO` (TLS is the ClassicNet seam).  Omitting a root leaves the
+dep safely OFF (`iHaveRegExp/iHaveZlib` unset), which is fine for a seam-only
+smoke (the darwin8 `d8_tls_smoke` never touched PCRE2/zlib either).
+
+**Fork platform classification (landed 2026-09-12, `classicnet-seam`):**
+`CMAKE_SYSTEM_NAME STREQUAL "RetroPPC"` → `iPlatformClassic` (new `config.h.in`
+`#cmakedefine`), platform file `generic.c`; the whole POSIX platform layer
+(`posix/{datagram,locale,pipe,process,service}.c` — BSD socks / dlopen /
+posix_spawn) and `posix/socket.c` are **not** built when `iPlatformClassic`; the
+network seam uses `platform/classicnet/socket.c` + `tlsrequest.c`. Non-classic
+tiers are untouched (verified: the host `iPlatformApple` the_Foundation still
+configures+builds clean, producing `lib_Foundation.a`).
+
+**Defect inventory — the actual port (each is a per-file job, 2026-09-12):**
+- `src/address.c` — depth-1: `#include <sys/socket.h> <netdb.h> <ifaddrs.h>`
+  and the `getaddrinfo`/`struct addrinfo` resolver body + `sockaddr` are
+  unconditionally POSIX.  The ClassicNet seam DOES use `iAddress`
+  (`tlsrequest.c` calls `lookupTcpCStr_Address` + `waitForFinished_Address`),
+  so it can't be dropped; it needs a Classic branch that (a) gated the socket
+  header includes and (b) resolves via the CNTransport host/port instead of
+  `getaddrinfo` (the actual DNS/connect happens inside `CN_OTCreate`), or a
+  raw-sockaddr-free stub that still completes `lookupFinished`.
+- `src/fileinfo.c` — `iFileInfo` uses `struct stat` (`st_mtimespec` — not on
+  classic's stat) and `<dirent.h>` (not supported on Retro68).  Needs a Classic
+  `FSOpen`/`FSMakeFSSpec`/`FInfo`-based implementation for type/size/time +
+  directory enumeration.  **Not needed by a seam-only smoke** → can be excluded
+  from the Classic SOURCES for the first slice (the darwin8 seam-only smoke also
+  skipped PCRE2/zlib/archive).
+- `src/block.c` — `crc32_Block`: on Retro68 `uint32_t` is `unsigned long` while
+  `iCrc32`/`unistring_uint32_t` is `unsigned int`; the definition's return type
+  conflicts with `block.h`'s `uint32_t` prototype.  A real Retro68 `uint32_t`
+  type-width fix (same class of bug as the PCRE2 `int32_t==long` mismatch, but
+  here it needs a source-side resolution, not just a warning suppression).
+- Likely once those pass: `path.c`/`file.c`/`networkproxy.c`/`threadpool.c`
+  POSIX assumptions; `src/platform/generic.c` may need a classic file/runtime
+  backend.
+- **The seam itself is darwin8-only today**: `platform/classicnet/socket.c` and
+  `tlsrequest.c` call `CN_Darwin8Create` (and assume `getaddrinfo` inside it).
+  For classic it must call the OT create instead (`CN_OTCreate`/the
+  `cn_ot` CNTransport vtable the L9 `cn_ot_smoke` already proves).  The poll /
+  send / recv / close vtable is transport-agnostic, so this is a
+  `CN_WITH_DARWIN8` vs `CN_WITH_OT` branch around the create, not a rewrite.
+
+**The seam-only slice stop:** the clean, committable increment landed on
+`classicnet-seam` is the platform classification + dep wiring + inventory above.
+The working `d8_tls_smoke`-for-classic (iTlsRequest over OT, cross-built and
+fetching on the macos9 guest via a boot-root log) is the next slice; it needs the
+`address.c`/`block.c` Classic fixes, the OT create branch in the seam, a
+`mac/CMakeLists.txt` target linking the_Foundation + `cn_ot` + mbedTLS-ppc, and
+a Retro68 `tls_smoke`.
+
 ## Tiger AppKit (T-tier UI)
 
 Era-correct AppKit facts, expect all of these again when wiring

@@ -467,3 +467,35 @@ cmdline) between runs.
     on-device path for a console app is Startup-Items + boot-root log +
     retrieve-log.sh, and the ONLY reason it can launch at all is the real
     creator (a `.bin`/`????` deploy → Finder error -199).
+7. **the_Foundation → L9 (classic Mac) — STARTED, foundation batch landed
+   (2026-09-12, `classicnet-seam`).** This is the core-first slice the user
+   chose: cross-build the_Foundation + ClassicNet OT seam for Retro68 (the
+   mirror of the darwin8 `d8_tls_smoke`). *Feasibility confirmed + the real
+   port surface mapped* — Retro68 ships a genuine POSIX subset (`unistd.h`,
+   `sys/stat.h`, `dirent.h`, `fcntl.h`, `sys/wait.h`, `sys/select.h`) **and a
+   full `pthread.h`+`libThreadsLib.a`** (backed by the classic Threads manager),
+   so `iHavePThread` is real and the seam's `iTlsRequest` worker thread needs no
+   fallback; the *missing* headers are `sys/socket.h`/`netdb.h`/`poll.h`/
+   `dlfcn.h` (and `dirent.h` is a stub that `#error`s). **Landed (fork, 3
+   files):** `CMakeLists.txt` classifies `RetroPPC` as `iPlatformClassic`
+   (platform `generic.c`) and stops building the POSIX platform layer +
+   `posix/socket.c` when Classic (the network seam uses
+   `platform/classicnet/*`); `config.h.in` adds the `iPlatformClassic`
+   `#cmakedefine`; `Depends.cmake` adds a RetroPPC branch that wire the Retro68
+   static `libunistring`/PCRE2/zlib from `UNISTRING_DIR`/`PCRE2_ROOT`/`ZLIB_ROOT`
+   (absolutized) and forces `CURL/OPENSSL_FOUND=NO` — this also stops host
+   pkg-config from leaking the x86_64 pcre2/zlib into the PPC cross-build (the
+   homebrew `find_package` landmine). **Configure succeeds** for RetroPPC with
+   `TFDN_CLASSICNET=ON`, resolving `iPlatformClassic`/`iHavePThread`/
+   `iHaveZlib`/`iHavePcre2`/`iHaveTlsRequest` correctly. **Non-regression:**
+   the host `iPlatformApple` the_Foundation still configures+builds
+   (`lib_Foundation.a`); darwin8 is untouched (it also runs `iPlatformApple`).
+   **Next slice (the working seam) needs:** `address.c` (`getaddrinfo`/sockets
+   → CNTransport host/port) + `block.c` (`crc32_Block` `uint32_t`==`unsigned
+   long` vs `unistring_uint32_t` conflict) Classic fixes, `fileinfo.c` excluded
+   from the Classic seam SOURCES (not needed by a fetch), a `CN_WITH_OT` create
+   branch in the `platform/classicnet` seam (today it calls `CN_Darwin8Create`
+   only; the OT seek the L9 `cn_ot_smoke` already proves), a `mac/CMakeLists.txt`
+   target linking the_Foundation + `cn_ot` + mbedTLS-ppc, and a Retro68
+   `tls_smoke` (Startup-Items + boot-root log for the on-device proof). Full
+   inventory + recipe: docs/arcana.md "the_Foundation on Retro68".
