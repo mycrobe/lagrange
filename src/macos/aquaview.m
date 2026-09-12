@@ -275,8 +275,22 @@ static Uint16 keyModFromFlags_(unsigned long f);
     return NSMakePoint(cx, cy);
 }
 
+static NSEvent *gPopupEvent_; /* most recent mouse-down NSEvent (context menus) */
+
+void setAquaPopupEvent_Aqua(void *event) {
+    if (gPopupEvent_) { [gPopupEvent_ release]; gPopupEvent_ = nil; }
+    if (event) { gPopupEvent_ = [(NSEvent *) event retain]; }
+}
+
+void *currentAquaPopupEvent_Aqua(void) { return gPopupEvent_; }
+
+void *aquaMainView_Aqua(void) { return gView_; }
+
 - (void)pushMouse:(NSEvent *)event down:(BOOL)down {
     wakeAquaTick_();
+    if (down) {
+        setAquaPopupEvent_Aqua(event); /* remember for a possible context menu */
+    }
     NSPoint p = [self sdlPoint:event];
     Uint8 button = SDL_BUTTON_LEFT;
     int btn = [event buttonNumber];
@@ -769,6 +783,7 @@ int initAquaView_app(int width, int height) {
 void deinitAquaView_app(void) {
     invalidateAquaTick_();
     gTimerTarget_ = nil; /* not owned here: the static AquaWidgetTimer owns it */
+    setAquaPopupEvent_Aqua(NULL); /* release the retained context-menu event */
     if (gLastPresented_) { free(gLastPresented_); gLastPresented_ = NULL; gLastPresentedBytes_ = 0; }
     if (gView_) { [gView_ release]; gView_ = nil; }
     if (gWin_)  { [gWin_ release];  gWin_  = nil; }

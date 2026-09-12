@@ -32,3 +32,14 @@ void  endAutoreleasePool_Aqua(void *pool);
    `~open newtab:1 url:` command (Tiger's `open` has no --args, so a
    bundle-launched app cannot take a positional URL arg). */
 void registerUrlHandler_Aqua(void);
+
+/* Context-menu event plumbing.  Tiger has no `popUpMenuPositioningItem:
+   atLocation:inView:` (10.6+), so the native menu backend must show a
+   context menu through +[NSMenu popUpContextMenu:withEvent:forView:], which
+   needs the originating NSEvent.  The Aqua view remembers the most recent
+   mouse-down NSEvent here; the menu backend (canvasmenu_impl_aqua.m) asks for
+   it.  Handled as void* so this header stays C-compatible (like the pool
+   helpers); the ObjC caller casts back to NSEvent and NSView. */
+void setAquaPopupEvent_Aqua(void *event);
+void *currentAquaPopupEvent_Aqua(void);
+void *aquaMainView_Aqua(void);

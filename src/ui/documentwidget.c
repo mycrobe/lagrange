@@ -5297,7 +5297,7 @@ static iBool processEvent_DocumentWidget_(iDocumentWidget *d, const SDL_Event *e
                                     { "---", 0, 0, NULL } },
                                 4);
                     }
-#if (defined (iPlatformApple) && defined (LAGRANGE_ENABLE_MAC_MENUS)) || defined (iPlatformTerminal)
+#if (defined (iPlatformApple) && defined (LAGRANGE_ENABLE_MAC_MENUS)) || defined (iPlatformTerminal) || defined (LAGRANGE_NATIVE_MENU)
                     pushBackN_Array(
                         &items,
                         (iMenuItem[]){

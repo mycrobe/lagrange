@@ -252,19 +252,77 @@ cmdline) between runs.
        **Native Cmd shortcuts work** via menu-first key-equivalent handling +
     a widget-kit fallback in the Aqua window; quitting is clean (`atexit`
     `deinit_Foundation` so the AppKit-exit host doesn't trip the Foundation
-    assert). Evidence: `~/classic/petal/logs/l4-aqua-native-menu-2026-09-10.png`.
-    **Remaining:** the glyph `〉` (U+3009, sidebar collapse arrow) missing from the
-   bundled fontpack (`failed to find 00003009`); context-menu popups
-   (`showPopupMenu_MacOS` needs an `NSEvent`, deferred); a domain-mismatch /
-   untrusted cert should show a soft warning dialog rather than just an empty
-   page (the on-device TOFU mismatch capture showed a blank document; the
-   cert-warning banner / red-lock "soft warning" toast is still to be verified
-   on tiger). The real-network
-   fetch + TOFU trust gate (both states) is now evidenced on-device — see the
-   "Last completed milestone". New with that slice: the Aqua host registers a
-   `kAEGetURL` handler + `osx/Info.plist` declares `gemini`/`gopher`/`gophers`/
-   `spartan` URL schemes (Tiger's `open` has no `--args`), and `LSEnvironment`
-   `AQUA_DEBUG` so the app-owned log lands in `/tmp/L4.log`.
+     assert). Evidence: `~/classic/petal/logs/l4-aqua-native-menu-2026-09-10.png`.
+     **Menu ellipsis fixed (2026-09-11):** the app menu "Preferences…" was
+     rendering as `Preferences‚Ä¶`. Root cause is a compiler charset bug, not a
+     Tiger limit — the darwin8 gcc decodes ObjC `@"..."` literals as MacRoman,
+     mangling any non-ASCII byte (and `@"\uXXXX"` escapes). Fixed by building
+     such titles from UTF-8 at runtime via `stringWithUTF8String` (new
+     `utf8String_` helper in `canvasmenu_impl_aqua.m`), also fixing the arrow
+     key-equivalents (`@"\u2190"` etc.). Proven on petal with a PPC probe; the
+     rebuilt L4 binary carries the correct UTF-8 `Preferences…`. Full root
+     cause + rule in docs/arcana.md ("darwin8 gcc mangles non-ASCII...").
+     **Remaining:** the glyph `〉` (U+3009, sidebar collapse arrow) missing from the
+    bundled fontpack (`failed to find 00003009`); a domain-mismatch /
+    untrusted cert should show a soft warning dialog rather than just an empty
+    page (the on-device TOFU mismatch capture showed a blank document; the
+    cert-warning banner / red-lock "soft warning" toast is still to be verified
+    on tiger). The real-network
+    fetch + TOFU trust gate (both states) is now evidenced on-device — see the
+    "Last completed milestone". New with that slice: the Aqua host registers a
+    `kAEGetURL` handler + `osx/Info.plist` declares `gemini`/`gopher`/`gophers`/
+    `spartan` URL schemes (Tiger's `open` has no `--args`), and `LSEnvironment`
+    `AQUA_DEBUG` so the app-owned log lands in `/tmp/L4.log`.
+    **Context-menu popups now implemented (2026-09-11):** right-click
+    context menus actually appear on L4.  Tiger (10.4) does not have the
+    10.6+ `popUpMenuPositioningItem:atLocation:inView:`, so the native menu
+    backend must pop through `+[NSMenu popUpContextMenu:withEvent:forView:]`,
+    which needs the originating NSEvent.  The Aqua view now remembers the most
+    recent mouse-down NSEvent (`setAquaPopupEvent_Aqua` in aquaview.m, exposed
+    C-clean via aquaview.h) and `showPopupMenu_MacOS` uses it + `aquaMainView_`
+    as the `forView`.  The tick timer is scheduled in `NSDefaultRunLoopMode`,
+    so it does not re-enter the widget kit during the modal menu-tracking loop
+     (no pausing needed).  Cross-gcc clean + full L4 rebuild + on-device launch
+     verified; the actual right-click pop needs a physical click on petal
+     (System Events is gated over SSH).
+     **Native context-menu glyphs fixed (2026-09-11):** Tiger's menu font can't
+     render Lagrange's `*_Icon` codepoints (tofu), so the document menu's
+     "Go Back / Go Forward / Go to Parent / Go to Root" nav items showed as
+     `>>> ◼` and any icon-prefixed label as a black box.  `showPopupMenu_MacOS`
+     + `populateMenu_` now run labels through `nativeMenuLabel_` (strips the
+     `###`/`///`/``` markers, the leading icon glyph + space, and colour
+     escapes — the same text-only treatment the real mac host uses), and
+     `documentwidget.c`'s nav items reach their text-bearing labels on this host
+     via `|| defined (LAGRANGE_NATIVE_MENU)` (the `iPlatformApple` gate isn't
+      set on the darwin8 cross-build, and enabling it globnally risks Apple
+      return-key semantics).  Cross-gcc clean + rebuilt + deployed (running on
+      petal, PID 4634); verify by right-clicking the document.
+      **Native checkmarks for checked items (2026-09-11):** `nativeMenuLabel_`
+      now reports the `###` (checked) marker and the item builders set
+      `[item setState:NSOnState]` for it (menu bar + context menu), so checked
+      items get a real macOS checkmark instead of a stripped-to-plain-text
+      label (mirrors src/platform/macos.m).  Lagrange marks items `###`
+      dynamically (context menus via `updateMenuItems`/`setSelected_`
+      `NativeMenuItem`, dropdown menu buttons), so the checkmark shows there;
+      the top-level menu-bar sidebar-mode toggles are static (unmarked) under
+      the native-menu path — same as the real mac build's bar.  No default
+      checked       item is reachable to screenshot via SSH, so verified by
+      cross-gcc clean + rebuild + deployed (running on petal) + `setState:`
+      selector present in the binary.
+      **Menu-bar checkmarks too (2026-09-11):** the View menu's left-sidebar-mode
+      toggles ("Show Bookmarks / …") now get a native checkmark on the active
+      one, updating live.  The native menu bar is built once from static arrays
+      (the widget kit's `###` marking only runs in the open/dropdown path), so
+      the Aqua host mirrors it itself: `handleCommand_MacOS` handles
+      `sidebar.mode.changed` and `markSidebarModeCheck_MacOS` walks the View
+      menu's `sidebar.mode arg:N toggle:1` items, setting `NSOnState` on the
+      matching one.  The initial state required the sidebar to announce its mode
+      on init (`sidebarwidget.c` now posts `sidebar.mode.changed arg:N` after
+      the initial `setMode`, queued so it's processed once the menu bar exists);
+      `root.c`'s toolbar handler was made NULL-safe for that.  Verified on-device:
+      "Show Bookmarks" checked at launch, then live-moved to "Show Feed Entries"
+      after clicking it (evidence
+      `l4-aqua-viewmenu-check-bookmarks-...png` + `-feeds-...png`).
  2. **N3 tactile confirmation (Phase 1) is now largely covered by the T-tier
     fetch/TOFU evidence above** — the visual check that the app shows a fetched
     page + the TOFU trust/mismatch UI, on petal, was produced for the Aqua host

@@ -24,6 +24,7 @@
 #import <SDL_timer.h>
 
 #include "app.h"
+#include "aquaview.h"
 #include "lang.h"
 #include "ui/canvasmenu.h"
 #include "ui/command.h"
@@ -34,6 +35,7 @@
 
 static void ensureAppMenu_(void);
 static void ensureWindowMenu_(void);
+static void markSidebarModeCheck_MacOS(int mode);
 
 /* Pre-SnowLeopard (Tiger/Leopard) AppKit does NOT automatically identify the
    first item of a programmatically-set main menu as the application menu: a
@@ -147,15 +149,27 @@ static AquaMenuItemTarget *postingTarget_(const char *command) {
     return target;
 }
 
+/* gcc's ObjC `@"..."` literals are decoded with the MacRoman execution
+   character set (darwin8 cc1), so a non-ASCII character *in a literal* --
+   and even a `\uXXXX` escape -- is mangled (verified on petal: the literal
+   "Preferences…" decodes to U+201A U+00C4 U+00B6, "‚Ä¶").  Build such
+   strings from UTF-8 at runtime instead; `stringWithUTF8String` decodes
+   correctly, and NSString/NSMenuItem preserve the result.  Non-ASCII that
+   lives in a C string literal (below) is fine: the bytes are passed through
+   verbatim to the UTF-8 decoder, bypassing the literal's charset step. */
+static NSString *utf8String_(const char *utf8) {
+    return [NSString stringWithUTF8String:utf8];
+}
+
 /* ------------------------------------------------------- key equivalents -- */
 
 static NSString *keyEquivalent_(int key) {
     if (key > 0) {
         switch (key) {
-            case SDLK_LEFT:  return @"\u2190";
-            case SDLK_RIGHT: return @"\u2192";
-            case SDLK_UP:    return @"\u2191";
-            case SDLK_DOWN:  return @"\u2193";
+            case SDLK_LEFT:  return utf8String_("\xe2\x86\x90");
+            case SDLK_RIGHT: return utf8String_("\xe2\x86\x92");
+            case SDLK_UP:    return utf8String_("\xe2\x86\x91");
+            case SDLK_DOWN:  return utf8String_("\xe2\x86\x93");
             default: break;
         }
         if (key < 0x2500) {
@@ -185,7 +199,36 @@ static void setShortcut_(NSMenuItem *item, int key, int kmods) {
 
 /* ------------------------------------------------------ menu item building -- */
 
-static NSMenuItem *makeItem_(NSString *title, const iMenuItem *entry, BOOL isDisabled) {
+/* A native AppKit menu cannot render Lagrange's icon glyphs (the `*_Icon`
+   codepoints live in supplementary planes / symbol blocks that Tiger's menu
+   font lacks -- they show as tofu), and macOS native menus are text-only
+   anyway (the real mac host strips them too: src/platform/macos.m).  Strip any
+   `###`/`///`/``` marker prefix, the leading icon glyph (+ its trailing
+   space), and any colour escapes, so only the readable label text reaches
+   NSMenu.  `label` must already be translated (translateCStr_Lang).  The `###`
+   marker means "checked" and is reported via `isCheckedOut` so the caller can
+   set the native checkmark. */
+static NSString *nativeMenuLabel_(const char *label, BOOL *isCheckedOut) {
+    BOOL isChecked = NO;
+    if (startsWith_CStr(label, "###")) {
+        isChecked = YES;
+        label += 3;
+    }
+    else if (startsWith_CStr(label, "///") || startsWith_CStr(label, "```")) {
+        label += 3;
+    }
+    iString title;
+    initCStr_String(&title, label);
+    removeIconPrefix_String(&title);   /* drop the leading icon glyph + space */
+    removeColorEscapes_String(&title); /* native menus are text-only */
+    NSString *result = [NSString stringWithUTF8String:cstr_String(&title)];
+    deinit_String(&title);
+    if (isCheckedOut) *isCheckedOut = isChecked;
+    return result;
+}
+
+static NSMenuItem *makeItem_(NSString *title, const iMenuItem *entry, BOOL isDisabled,
+                             BOOL isChecked) {
     const char *command = (entry->command && entry->command[0]) ? entry->command : NULL;
     if (command && startsWith_CStr(command, "submenu id:")) {
         NSMenuItem *item = [[[NSMenuItem alloc] initWithTitle:title action:nil
@@ -206,25 +249,24 @@ static NSMenuItem *makeItem_(NSString *title, const iMenuItem *entry, BOOL isDis
         item = [[[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""] autorelease];
     }
     [item setEnabled:!isDisabled];
+    if (isChecked) {
+        [item setState:NSOnState];
+    }
     return item;
 }
 
 static void populateMenu_(NSMenu *menu, const iMenuItem *items, size_t n, int at) {
     for (size_t i = 0; i < n && items[i].label; ++i) {
         const char *label = items[i].label;
-        if (equal_CStr(label, "---")) {
+        const char *translated = translateCStr_Lang(label);
+        if (equal_CStr(translated, "---")) {
             [menu insertItem:[NSMenuItem separatorItem] atIndex:at++];
             continue;
         }
-        iBool isDisabled = iFalse;
-        if (startsWith_CStr(label, "///") || startsWith_CStr(label, "```")) {
-            isDisabled = iTrue;
-            label += 3;
-        }
-        NSMenuItem *item = makeItem_(
-            [NSString stringWithCString:translateCStr_Lang(label)
-                               encoding:NSUTF8StringEncoding],
-            &items[i], isDisabled);
+        iBool isDisabled = (startsWith_CStr(label, "///") || startsWith_CStr(label, "```"));
+        BOOL isChecked = NO;
+        NSMenuItem *item = makeItem_(nativeMenuLabel_(translated, &isChecked), &items[i],
+                                     isDisabled, isChecked);
         [menu insertItem:item atIndex:at++];
     }
 }
@@ -382,6 +424,43 @@ void handleCommand_MacOS(const char *cmd) {
     else if (equal_Command(cmd, "emojipicker")) {
         [app orderFrontCharacterPalette:nil];
     }
+    else if (startsWith_CStr(cmd, "sidebar.mode.changed arg:")) {
+        /* Mirror the active left-sidebar mode as a native checkmark on the View
+           menu ("Show Bookmarks" etc.).  The sidebar posts this on init and on
+           every mode change. */
+        const char *p = strstr(cmd, "arg:");
+        markSidebarModeCheck_MacOS(atoi(p + 4));
+    }
+}
+
+/* Set a native checkmark on the View menu's left-sidebar-mode item matching
+   `mode`, clearing the others.  The items carry the command
+   "sidebar.mode arg:N toggle:1" (see viewMenuItems_ in window.c). */
+static void markSidebarModeCheck_MacOS(int mode) {
+    NSMenu *appMenu = mainMenu_();
+    if (!appMenu) {
+        return;
+    }
+    const int topCount = [appMenu numberOfItems];
+    for (int t = 0; t < topCount; ++t) {
+        NSMenu *sub = [[appMenu itemAtIndex:t] submenu];
+        if (!sub) {
+            continue;
+        }
+        const int n = [sub numberOfItems];
+        for (int i = 0; i < n; ++i) {
+            NSMenuItem *item = [sub itemAtIndex:i];
+            id target = [item target];
+            if ([target isKindOfClass:[AquaMenuItemTarget class]]) {
+                const char *itemCmd = [target command];
+                if (itemCmd && startsWith_CStr(itemCmd, "sidebar.mode arg:")) {
+                    const char *arg = strstr(itemCmd, "arg:");
+                    const int itemMode = atoi(arg + 4);
+                    [item setState:(itemMode == mode) ? NSOnState : NSOffState];
+                }
+            }
+        }
+    }
 }
 
 /* The application menu (About / Preferences / Hide / Quit) at index 0.  It must
@@ -418,9 +497,9 @@ static void ensureAppMenu_(void) {
         [appSubmenu addItem:item];
         [item release];
         [appSubmenu addItem:[NSMenuItem separatorItem]];
-        item = [[NSMenuItem alloc] initWithTitle:@"Preferences…"
-                                          action:@selector(post:)
-                                   keyEquivalent:@","];
+        item = [[NSMenuItem alloc] initWithTitle:utf8String_("Preferences\xe2\x80\xa6")
+                                           action:@selector(post:)
+                                    keyEquivalent:@","];
         [item setKeyEquivalentModifierMask:NSCommandKeyMask];
         [item setTarget:postingTarget_("preferences")];
         [appSubmenu addItem:item];
@@ -537,9 +616,12 @@ iBool hasNativeMenu_Platform(void) {
     return iTrue;
 }
 
-/* 10.4 shows context menus only through +[NSMenu popUpContextMenu:withEvent:forView:],
-   which needs an NSEvent; the shim does not keep the originating mouse event, so
-   context-menu popups are a follow-up (the menu is built and wired here). */
+/* Tiger (10.4) has no `popUpMenuPositioningItem:atLocation:inView:` (10.6+),
+   so a context menu must be shown through +[NSMenu popUpContextMenu:
+   withEvent:forView:], which needs the originating NSEvent.  The Aqua view
+   remembers the most recent mouse-down event (aquaview.m
+   setAquaPopupEvent_Aqua); use it here.  If none is available (e.g. a
+   keyboard- or programmatically-triggered popup), fall back to nothing. */
 void showPopupMenu_MacOS(iWidget *source, iInt2 windowCoord, const iMenuItem *items, size_t n) {
     (void) windowCoord;
     activateApp_();
@@ -548,17 +630,20 @@ void showPopupMenu_MacOS(iWidget *source, iInt2 windowCoord, const iMenuItem *it
     int at = 0;
     for (size_t i = 0; i < n && items[i].label; ++i) {
         const char *label = items[i].label;
-        if (equal_CStr(label, "---")) {
+        const char *translated = translateCStr_Lang(label);
+        if (equal_CStr(translated, "---")) {
             [menu insertItem:[NSMenuItem separatorItem] atIndex:at++];
             continue;
         }
         AquaMenuItemTarget *target = NULL;
         const char *command = (items[i].command && items[i].command[0]) ? items[i].command : NULL;
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:
-                                [NSString stringWithCString:translateCStr_Lang(label)
-                                                   encoding:NSUTF8StringEncoding]
+        BOOL isChecked = NO;
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:nativeMenuLabel_(translated, &isChecked)
                                                       action:(command ? @selector(post:) : nil)
                                                keyEquivalent:@""];
+        if (isChecked) {
+            [item setState:NSOnState];
+        }
         if (command) {
             target = postingTarget_(command);
             [target setSource:source];
@@ -567,6 +652,14 @@ void showPopupMenu_MacOS(iWidget *source, iInt2 windowCoord, const iMenuItem *it
         }
         [menu insertItem:item atIndex:at++];
         [item release];
+    }
+    NSEvent *event = (NSEvent *) currentAquaPopupEvent_Aqua();
+    NSView  *view  = (NSView *)  aquaMainView_Aqua();
+    if (event && view) {
+        [NSMenu popUpContextMenu:menu withEvent:event forView:view];
+    }
+    else {
+        fprintf(stderr, "[aqua-menu] popup dropped: no originating NSEvent\n");
     }
     [menu release];
 }

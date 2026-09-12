@@ -1600,7 +1600,9 @@ static iBool handleToolBarCommands_(iWidget *toolBar, const char *cmd) {
     }
     else if (equal_Command(cmd, "sidebar.mode.changed")) {
         iLabelWidget *viewTool = findChild_Widget(toolBar, "toolbar.view");
-        updateTextCStr_LabelWidget(viewTool, icon_SidebarMode(arg_Command(cmd)));
+        if (viewTool) {
+            updateTextCStr_LabelWidget(viewTool, icon_SidebarMode(arg_Command(cmd)));
+        }
         return iFalse;
     }
     else if (equal_Command(cmd, "toolbar.actions.changed")) {

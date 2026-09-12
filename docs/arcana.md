@@ -285,7 +285,16 @@ is the (pre-fix) run evidence. Also note the execPath quirk: app.c builds
 `execPath` by appending argv[0]'s basename to `SDL_GetBasePath()`, so
 `execPath/../resources.lgr` is always ENOTDIR — a deployed bundle needs an
 absolute `LAGRANGE_EMB_BIN` (`-DAQUA_EMB_BIN=/path/resources.lgr`, the host
-canvas uses an absolute path too).
+canvas uses an absolute path too). **⚠️ trap (hit 2026-09-11):** `osx/CMakeLists.txt`
+defaults `AQUA_EMB_BIN` to the dev-relative `"resources.lgr"` (fine for a host
+canvas run, useless for a deployed bundle). A *clean* reconfigure (`rm -rf
+build-osx` + `cmake` without `-DAQUA_EMB_BIN=...`) silently bakes that relative
+string back in, so the freshly-rebuilt `.app` starts, prints
+`failed to load resources: No such file or directory`, and `exit(-1)s` the
+moment `init_Resources` runs — the app never stays up. Every rebuild meant for
+petal must pass `-DAQUA_EMB_BIN=/tmp/L4.app/Contents/MacOS/resources.lgr`
+(i.e. the deployed absolute path). `scripts/build-osx.sh` does NOT pass it, so a
+bare `build-osx.sh` after a clean is NOT deployable as-is.
 
 **Finder/LaunchServices injects a `-psn_<serial>` argv — strip it in the Aqua
 main (durable).** Mac OS X GUI apps launched from Finder/`open` receive a
@@ -370,6 +379,88 @@ dropped the need for it, which is exactly why lagrange's own modern menu code
 path `[[[NSApp mainMenu] itemAtIndex:0] submenu]` and assumes 10.6+ app-menu
 detection, and must not be cargo-culted onto the pre-10.6 Aqua host. Evidence:
 `~/classic/petal/logs/l4-aqua-menubug-2026-09-10.png` + `-menubug-...txt`.
+
+**Tiger has no `popUpMenuPositioningItem:atLocation:inView:` (10.6+) — context
+menus need the originating NSEvent (durable, 2026-09-11).** The modern mac
+menu path pops a context menu with the 10.6+ `popUpMenuPositioningItem:
+atLocation:inView:` (see `canvasmenu_impl_SDL.m`). That selector does not exist
+on pre-10.6, so the Aqua host must use the (older, still-present)
+`+[NSMenu popUpContextMenu:withEvent:forView:]`, which takes the originating
+NSEvent. The widget kit's `showPopupMenu_MacOS` only forwards a windowCoord +
+the item array (no NSEvent), so the Aqua view remembers the latest mouse-down
+`NSEvent` (`setAquaPopupEvent_Aqua`/`currentAquaPopupEvent_Aqua` in aquaview.m,
+exposed as void* in aquaview.h to stay C-clean) and the menu backend uses it
+with the canvas view (`aquaMainView_Aqua`) as `forView`. The `forView` only
+needs to be a view in the event's window; `gView_` is the window's contentView.
+Reentrancy is not an issue: the Aqua tick timer is scheduled in
+`NSDefaultRunLoopMode`, which does not fire during the menu-tracking run-loop
+mode, so `step_App` is not re-entered while the popup is up. `popUpContextMenu`
+blocks modally until dismissed and needs a real (physical) right-click to
+trigger — System Events UI-scripted clicks are gated over SSH on this host.
+
+**Tiger's menu font can't render Lagrange's icon glyphs — native menus must
+strip them (durable, 2026-09-11).** The `*_Icon` codepoints (defs.h) mostly live
+in supplementary planes / symbol blocks the system menu font (Lucida Grande)
+lacks, so a native `NSMenu` label shows them as tofu (a black box, or the
+compact `">>>" backArrow_Icon` nav items showed as `>>> ◼`). The real mac host
+already stops them reaching NSMenu (`removeIconPrefix_String` in
+`src/platform/macos.m`); the canvasmenu Aqua host now does the same
+(`nativeMenuLabel_` in `canvasmenu_impl_aqua.m`: strips the `###`/`///`/```
+markers, drops the leading icon glyph + trailing space, and removes colour
+escapes). Native menus are text-only — that's the intended mac look (icons only
+render in the in-window/text-engine menus). Related: the document context-menu
+nav items ("Go Back" etc.) carry text only in the Apple branch of
+`documentwidget.c` (the `iPlatformApple && LAGRANGE_ENABLE_MAC_MENUS` gate);
+`iPlatformApple` is NOT defined on the darwin8 cross-build and it gates Apple
+return-key semantics in defs.h — too risky to define just for this — so the
+Aqua host reaches that text-bearing branch via `|| defined (LAGRANGE_NATIVE_MENU)`.
+
+**Native checkmarks: the widget kit only marks `###` in the open/dropdown path,
+not the always-visible native menu bar (durable, 2026-09-11).** `setSelected_`
+`NativeMenuItem` (the `###`/"checked" prefix) runs when a native menu is opened
+via `openMenuFlags_Widget`/dropdown selection, so context menus + dropdown
+menu buttons automatically get native checkmarks.  The top-level menu BAR,
+though, is built once from static arrays (`window.c` `*MenuItems_` →
+`insertMenuItems_MacOS`) with no marking + no re-populate, so its toggles never
+showed a check via that path.  The Aqua host mirrors it itself:
+`markSidebarModeCheck_MacOS` (canvasmenu_impl_aqua.m) walks every top-level
+submenu for items whose target command is `sidebar.mode arg:N toggle:1` and
+sets `NSOnState` on the one matching the active left-sidebar mode, driven from
+`handleCommand_MacOS` on `sidebar.mode.changed`.  But the sidebar's *initial*
+`setMode_SidebarWidget` (sidebarwidget.c init) does not post that event, and
+`findWidget_App("sidebar")` is NULL during the menu-bar build (window/menu init
+runs before the sidebar is created), so a build-time mark can't see it.  Fix:
+`sidebarwidget.c` now posts `sidebar.mode.changed arg:N` (side-appropriate) right
+after the initial `setMode` — `postCommand_App` queues it, so it's dispatched
+once init completes and the View menu exists — and `root.c`'s toolbar handler
+was NULL-guarded for that queued event.  Verified on-device (System Events):
+"Show Bookmarks" checked at launch → live-moved to "Show Feed Entries" after
+clicking it.  Note: Tiger's System Events reports a menu item's `value` as
+`missing value` regardless of check state — read the checkmark visually (or via
+`AXMenuItemMarkChar`), not via `value`.
+
+**The darwin8 gcc mangles non-ASCII in ObjC `@"..."` literals — a compiler
+charset bug, NOT a Tiger rendering limit (durable, 2026-09-11).** The app-menu
+item "Preferences…" showed as `Preferences‚Ä¶` on petal. This is NOT Tiger
+failing to render `…` (U+2026 renders fine, and the *lang-string* `…` items
+were always correct): the old Apple gcc (`powerpc-apple-darwin8-gcc`, cc1)
+decodes an ObjC `@"..."` string literal with the **MacRoman execution
+character set**, so any non-ASCII bytes in the literal -- and even a
+`@"\uXXXX"` escape -- come out mangled. Proven on petal with a minimal PPC
+probe (compiled with the real cross-gcc, run on the G4):
+`@"Preferences…"` and `@"Preferences\xe2\x80\xa6"` both decode to
+U+201A U+00C4 U+00B6 (`‚Ä¶`, len 14, not U+2026), and `@"\u2190"` decodes to
+U+201A U+00DC U+00EA. By contrast `[NSString stringWithUTF8String:
+"Preferences\xe2\x80\xa6"]` and `[NSString stringWithCString:encoding:
+NSUTF8StringEncoding]` yield the correct U+2026, and the NSString survives
+unchanged into an NSMenuItem title. **Rule: never put a non-ASCII character
+(or `\uXXXX` escape) in an ObjC `@"..."` literal in the darwin8 sources;
+build the string from UTF-8 bytes at runtime via `stringWithUTF8String:`**
+(`utf8String_` helper in `canvasmenu_impl_aqua.m`). Non-ASCII in a plain C
+string literal is fine (bytes pass verbatim to the UTF-8 decoder). Verified:
+the rebuilt L4 binary contains the correct UTF-8 `Preferences…` and no
+MacRoman-mangled sequence. `\xc9` in a literal is MacRoman `…`, but use the
+runtime helper, not byte escapes.
 
 **Tiger AppKit under `[NSApp run]` + a timer needs explicit autorelease pools, and
 the app-owned log must be unbuffered (durable, 2026-09-10).** A nibless Aqua host

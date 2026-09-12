@@ -1546,6 +1546,10 @@ void init_SidebarWidget(iSidebarWidget *d, enum iSidebarSide side) {
     addChildFlags_Widget(content, iClob(d->blank), resizeChildren_WidgetFlag);
     addChildFlags_Widget(vdiv, iClob(content), expand_WidgetFlag);
     setMode_SidebarWidget(d, bookmarks_SidebarMode);
+    /* Announce the initial mode so native menus / the toolbar can reflect it
+       (queued; processed once init completes). */
+    postCommandf_App("%s.mode.changed arg:%d", side == left_SidebarSide ? "sidebar" : "sidebar2",
+                     d->mode);
     d->resizer =
         addChildFlags_Widget(w,
                              iClob(new_Widget()),
