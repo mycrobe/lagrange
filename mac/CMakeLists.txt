@@ -154,6 +154,14 @@ if (TARGET the_Foundation)
         -Wno-error=incompatible-pointer-types
         -Wno-incompatible-pointer-types
         -Wno-format)
+    # Retro68 POSIX void (clock_gettime has no binding + is _POSIX_TIMERS-gated;
+    # struct tm has no tm_gmtoff).  Draft shim in mac/retro68_posix_shim.h, and
+    # src/time.c now guards tm_gmtoff for iPlatformClassic.  Delivering
+    # clock_gettime via -include is NOT yet wired: force-including <time.h>
+    # before every TU disturbs Retro68's pthread.h feature-flag setup and
+    # silently suppresses its function declarations (c11threads.c -> implicit
+    # pthread_mutex_*/pthread_create).  The POSIX-threads-vs-Classic-Mac
+    # headers interop is the open item; see docs/arcana.md.
 endif ()
 
 # --- the_Foundation seam fetch proof: a Gemini fetch through iTlsRequest over
