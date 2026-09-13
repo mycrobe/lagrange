@@ -499,3 +499,25 @@ cmdline) between runs.
    target linking the_Foundation + `cn_ot` + mbedTLS-ppc, and a Retro68
    `tls_smoke` (Startup-Items + boot-root log for the on-device proof). Full
    inventory + recipe: docs/arcana.md "the_Foundation on Retro68".
+   **PROGRESS (same day):** the seam OT branch + the Classic exclusion landed and
+   the cross-build now compiles the_Foundation's core modules. `tlsrequest.c`
+   gained a `CN_WITH_OT` transport abstraction (CN_TRANSPORT_STORAGE,
+   CN_SEAM_{CREATE,WAIT,CANCEL}; OT = non-blocking CNOTTransport + cooperative
+   YieldToAnyThread + a TickCount connect watchdog) and gates the informational
+   iAddress lookup off for OT (`CN_Startup` once). `CMakeLists` no longer builds
+   the BSD-socket classes (address.c/fileinfo.c/networkproxy.c + 
+   classicnet/socket.c) on `iPlatformClassic` (iSocket/iAddress/iFileInfo are
+   app/later work; the fetch path is iTlsRequest only). A `mac/` seam scaffold
+   (`mac/tls_smoke.c/.r` + a `LAGRANGE_TFDN_SEAM=ON`-gated `add_subdirectory`
+   the_Foundation + `cn_ot` lib in `mac/CMakeLists.txt`) cross-builds the
+   `d8_tls_smoke` analog. **DEFAULT `build-mac.sh` (cn_ot_smoke) stays GREEN** —
+   the seam is opt-in while the core's Retro68 port is in flight. **The blocker
+   is now the Retro68 POSIX void the arcana predicted:** the core assumes modern
+   POSIX and Retro68 doesn't provide it fully — `_POSIX_TIMERS`-gated
+   `clock_gettime` (declared but no binding found in the Retro68 sys libs,
+   needs a `time()`-based shim), `struct tm` has NO `tm_gmtoff` (time.c assigns/
+   reads it), `PTHREAD_ONCE_INIT` expands to the undefined `_PTHREAD_ONCE_INIT`
+   (c11threads.h), and more gaps likely surface behind these. This is the focus
+   of the next slice (a `mac/retro68_posix_shim.h` force-included, analogous to
+   darwin8's `darwin8_posix_shim.h`, but far deeper); the on-device `tls_smoke`
+   fetch follows once it cross-builds clean.

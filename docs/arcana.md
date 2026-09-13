@@ -732,6 +732,33 @@ fetching on the macos9 guest via a boot-root log) is the next slice; it needs th
 `mac/CMakeLists.txt` target linking the_Foundation + `cn_ot` + mbedTLS-ppc, and
 a Retro68 `tls_smoke`.
 
+**Retro68 POSIX void — the current build blocker (2026-09-12, discovered while
+cross-building the seam).** Beyond the socket classes, the_Foundation core
+assumes modern POSIX in ways Retro68 does not provide (deeper than Tiger's 4
+shims). Found so far, each blocking `time.c`/`c11threads.c`/…:
+
+- **`clock_gettime`**: `Retro68/powerpc-apple-macos/include/time.h:172` declares it
+  ONLY under `#if defined(_POSIX_TIMERS)`, and no binding is present in the
+  checked Retro68 system static libs. `time.c initCurrent_Time` calls it
+  unconditionally. Need a `time()`-based (or `gettimeofday`) `CLOCK_REALTIME`
+  shim; do NOT just define `_POSIX_TIMERS` (that exposes the decl but the symbol
+  won't link).
+- **`struct tm` has no `tm_gmtoff`**: `time.c` assigns `tm->tm_gmtoff` and reads
+  `t->tm_gmtoff` under `#if !defined(iPlatformWindows)`. A header shim can't add
+  a struct member → guard those two sites for `iPlatformClassic` (iDate's
+  gmtOffsetSeconds becomes 0; the seam's cert-time validation uses mbedTLS's own
+  `cn_mac_time` source, not `time.c`, so this doesn't affect the fetch).
+- **`PTHREAD_ONCE_INIT` → `_PTHREAD_ONCE_INIT` is undefined**: Retro68's
+  `pthread.h:297` defines `PTHREAD_ONCE_INIT _PTHREAD_ONCE_INIT` but never
+  defines `_PTHREAD_ONCE_INIT`, so `c11threads.h:37` fails ("undeclared"). Provide
+  a valid initializer (`#define _PTHREAD_ONCE_INIT {0}`) for the classic build.
+- **`strnlen` etc.** : likely also absent (same class as Tiger); extend the
+  darwin8 shim approach with a force-included `mac/retro68_posix_shim.h`.
+
+The consolidated fix is a force-included `mac/retro68_posix_shim.h` (analogous to
+`osx/darwin8_posix_shim.h`) for the Classic the_Foundation build, `-include`d into
+only its TUs, plus the two `time.c` `#if !iPlatformClassic` guards for `tm_gmtoff`.
+
 ## Tiger AppKit (T-tier UI)
 
 Era-correct AppKit facts, expect all of these again when wiring
