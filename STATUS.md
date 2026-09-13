@@ -521,3 +521,17 @@ cmdline) between runs.
    of the next slice (a `mac/retro68_posix_shim.h` force-included, analogous to
    darwin8's `darwin8_posix_shim.h`, but far deeper); the on-device `tls_smoke`
    fetch follows once it cross-builds clean.
+   **Deeper finding (same day) — it's a header INTEROP, not just missing symbols:**
+   `clock_gettime` is `_POSIX_TIMERS`-gated with no binding, and `struct tm` has
+   no `tm_gmtoff` (src/time.c now guards `tm_gmtoff` for `iPlatformClassic`,
+   committed + pushed as `974d92d`). But delivering a `clock_gettime` via a
+   force-included shim (`-include`, which pulls `<time.h>`) BEFORE every TU
+   **disturbs Retro68's `pthread.h` feature-flag setup and silently suppresses
+   its function declarations** — `c11threads.c` then errors `implicit declaration
+   of pthread_mutex_*/pthread_create/…` despite `pthread.h` being included. And
+   pre-defining `PTHREAD_ONCE_INIT`/`{0}`-style macros collides with
+   `MacTypes.h:301`. So `mac/retro68_posix_shim.h` is a DRAFT (unwired draft +
+   the finding are committed); the clean fix must provide `clock_gettime` WITHOUT
+   reordering `pthread.h`'s feature-macro setup (e.g. a `clock_gettime` source
+   compiled into the lib + a Retro68-compatible declaration, not `-include`).
+   This pthread-vs-Classic-Mac-headers interop is THE open Classic port item.
