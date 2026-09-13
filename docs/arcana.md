@@ -732,32 +732,120 @@ fetching on the macos9 guest via a boot-root log) is the next slice; it needs th
 `mac/CMakeLists.txt` target linking the_Foundation + `cn_ot` + mbedTLS-ppc, and
 a Retro68 `tls_smoke`.
 
-**Retro68 POSIX void — the current build blocker (2026-09-12, discovered while
-cross-building the seam).** Beyond the socket classes, the_Foundation core
-assumes modern POSIX in ways Retro68 does not provide (deeper than Tiger's 4
-shims). Found so far, each blocking `time.c`/`c11threads.c`/…:
+**Retro68 POSIX/pthread void — SOLVED (2026-09-13; supersedes the blocker
+notes that used to live here).** the_Foundation assumes modern POSIX; Retro68
+provides much less. The corrected picture, after actually cross-building the seam:
 
-- **`clock_gettime`**: `Retro68/powerpc-apple-macos/include/time.h:172` declares it
-  ONLY under `#if defined(_POSIX_TIMERS)`, and no binding is present in the
-  checked Retro68 system static libs. `time.c initCurrent_Time` calls it
-  unconditionally. Need a `time()`-based (or `gettimeofday`) `CLOCK_REALTIME`
-  shim; do NOT just define `_POSIX_TIMERS` (that exposes the decl but the symbol
-  won't link).
-- **`struct tm` has no `tm_gmtoff`**: `time.c` assigns `tm->tm_gmtoff` and reads
-  `t->tm_gmtoff` under `#if !defined(iPlatformWindows)`. A header shim can't add
-  a struct member → guard those two sites for `iPlatformClassic` (iDate's
-  gmtOffsetSeconds becomes 0; the seam's cert-time validation uses mbedTLS's own
-  `cn_mac_time` source, not `time.c`, so this doesn't affect the fetch).
-- **`PTHREAD_ONCE_INIT` → `_PTHREAD_ONCE_INIT` is undefined**: Retro68's
-  `pthread.h:297` defines `PTHREAD_ONCE_INIT _PTHREAD_ONCE_INIT` but never
-  defines `_PTHREAD_ONCE_INIT`, so `c11threads.h:37` fails ("undeclared"). Provide
-  a valid initializer (`#define _PTHREAD_ONCE_INIT {0}`) for the classic build.
-- **`strnlen` etc.** : likely also absent (same class as Tiger); extend the
-  darwin8 shim approach with a force-included `mac/retro68_posix_shim.h`.
+- **Retro68 has NO pthread implementation.** newlib's `<pthread.h>` is the
+  RTEMS-flavored header: EVERY declaration sits inside
+  `#if defined(_POSIX_THREADS)`, and Retro68's `<sys/features.h>` never defines
+  `_POSIX_THREADS` for this target. The `sys/_pthreadtypes.h` *types*
+  (pthread_t/mutex_t/cond_t/once_t/key_t) DO appear (its guard is
+  `_POSIX_THREADS || __POSIX_VISIBLE >= 199506`, and the default feature macros
+  set `__POSIX_VISIBLE` high) — so code sees the types but gets "implicit
+  declaration of pthread_mutex_*/pthread_create". And no toolchain archive
+  defines the functions anyway: grep every `.a` for `T .*pthread` = 0 hits;
+  `libThreadsLib.a` only has NewThread/DisposeThread/GetCurrentThread/
+  YieldToAnyThread. (A `-include`d header pulling `<time.h>` does NOT suppress
+  `pthread.h`'s declarations — that earlier claim was a shell word-splitting
+  artifact, disproved with the preprocessor.)
+  Fix: `mac/posix/pthread.h` (wins `<pthread.h>` via
+  `include_directories(BEFORE)`) + `pthread_classic.c`, mapping the API onto the
+  Thread Manager. It reuses newlib's opaque 32-bit types as handles into side
+  tables, so it does NOT redefine them (redefining conflicts with
+  `sys/_pthreadtypes.h`). Threads are `kCooperativeThread` (switches only at
+  YieldToAnyThread) → spin-wait mutexes/condvars are race-free on one CPU; still
+  use `__sync_bool_compare_and_swap`/`__sync_lock_release` for the edges. Default
+  worker stack 512KB (`run_TlsRequest_` has a 128KB `rbuf` on the stack).
+  Deliberately no `PTHREAD_MUTEX_TIMED_NP` and no `pthread_cancel` declaration so
+  the_Foundation's probes pick `C11THREADS_NO_TIMED_MUTEX` and leave
+  `iHavePThreadCancel` unset.
+- **`clock_gettime`/`nanosleep`**: declared in `<time.h>` only under
+  `_POSIX_TIMERS`, with no binding. Do NOT define `_POSIX_TIMERS` globally: that
+  gate also makes `<time.h>` `#include <signal.h>`, and Retro68's `sys/signal.h`
+  pulls `<OpenTransport.h>`, whose `SIGHUP…` enum collides with signal.h's macros
+  (and `<MacTypes.h>`'s `true/false` enum collides with `<stdbool.h>`) in EVERY
+  TU, even non-OT ones. Instead declare just the two functions in
+  `mac/posix/classic_posix.h`, force-included (`-include`) by mac/CMakeLists.txt,
+  and implement them in `posix_classic.c` (`clock_gettime`→`gettimeofday`;
+  `nanosleep`→`TickCount` poll with `YieldToAnyThread`; `clockid_t` is defined
+  unconditionally in `<sys/types.h>`, so the decls work). `sched_yield` has no
+  decl either → declare it in our pthread.h and implement over `YieldToAnyThread`.
+- **`struct tm` has no `tm_gmtoff`**: guard the two `time.c` sites for
+  `iPlatformClassic` (committed `974d92d`).
+- **`true`/`false` vs `<MacTypes.h>`**: any TU that includes the_Foundation
+  headers (→ `<stdbool.h>`) and then a Mac/OT header must `#undef true` /
+  `#undef false` first (MacTypes declares them as enum constants). Needed in the
+  seam's `tlsrequest.c` and in `tls_smoke.c`.
+- **Static link order**: mbedTLS-ppc's platform macros call `cn_mac_time`/
+  `mbedtls_ms_time`/`mbedtls_platform_gmtime_r` (in `cn_ot`'s `cn_mac_time.o`),
+  while `cn_ot` calls mbedTLS → wrap both in `-Wl,--start-group … --end-group`.
+- **the_Foundation build-system gaps**: `tfdn_link_depends` never added
+  `${PCRE2_INCLUDE_DIRS}` (upstream assumes a global); `the_foundation.c` calls
+  the excluded networkproxy/address/datagram/locale init hooks → guard with
+  `!defined(iPlatformClassic)`; skip linking `pthread` for Classic. Consumer-side
+  name typo: `mac/CMakeLists.txt` set `UNISTRING_DIR` from the undefined
+  `LIBUNISTRING_RETRO68` (should be `UNISTRING_RETRO68`) — the empty value made
+  `Depends.cmake` find_path the host homebrew `libunistring.a` (x86_64) and leak
+  it into the PPC link.
 
-The consolidated fix is a force-included `mac/retro68_posix_shim.h` (analogous to
-`osx/darwin8_posix_shim.h`) for the Classic the_Foundation build, `-include`d into
-only its TUs, plus the two `time.c` `#if !iPlatformClassic` guards for `tm_gmtoff`.
+The green state: `cmake -S mac -B build-mac-seam -DLAGRANGE_TFDN_SEAM=ON …` builds
+`lib_Foundation.a`, `libclassic_posix.a` and `tls_smoke.bin` (valid PPC PEF); the
+default `scripts/build-mac.sh` (`cn_ot_smoke`) stays green.
+
+**On-device findings (macos9 guest, 2026-09-13) — the fetch works only with a
+main-thread OT path.** `tls_smoke` now fetches through iTlsRequest over OT+mbedTLS
+(`20 text/gemini … certSubj='CN = localhost' isVerified=1`), but getting there
+cost several on-device-only lessons:
+
+- **Never run the TLS fetch on a Thread Manager thread under Retro68.** Retro68's
+  `malloc` is `NewPtr` (see `Retro68/libretro/malloc.c`), and mbedTLS allocations
+  made from a secondary `kCooperativeThread` fail with
+  `MBEDTLS_ERR_SSL_ALLOC_FAILED` (-32512) even though the main thread allocates
+  fine (the proven `cn_ot_smoke` runs mbedTLS on the main thread). Instrumentation
+  showed `FreeMem/MaxBlock` are not a useful measure here (they track the system
+  heap, not the `NewPtr` zone), and the app's `SIZE` resource really is honoured
+  (parsed: 32 MB preferred / 16 MB min). Retargeting the heap zone with
+  `GetZone`/`SetZone` in the thread entry did NOT fix it. Decision: under
+  `CN_WITH_OT`, `submit_TlsRequest` runs the fetch body **synchronously on the
+  calling thread** (`d->thread` stays NULL; `cancel`/`deinit` skip the join). OT
+  is non-blocking and pumped with `YieldToAnyThread`, so a cooperative synchronous
+  fetch is safe. The pthread layer stays for the_Foundation's mutexes/objects,
+  which are main-thread only.
+- **`InitOpenTransport()` must be called on the main thread.** Calling it from the
+  worker crashes OS 9 (error type 3). Moved to `init_TlsRequest` (main thread);
+  `g_ot_refs` makes repeats cheap.
+- **Classic has no platform RNG**: the seam must call `cn_collect_jitter` +
+  `CN_TlsAddEntropy` after `CN_TlsCreate` (same step as `cn_ot_smoke`), or
+  CTR_DRBG seeding is weak/flaky.
+- **A 128 KB stack local in the worker forced a huge Thread Manager stack**; the
+  TLS receive buffer is `static` now, and worker stacks are 256 KB.
+- **Harness bug that cost a run:** `tls_smoke` called `deinit_Foundation()` but not
+  `init_Foundation()` — instant crash (error type 3). The d8 analogs call it.
+- **General layout rule** (already applied): `#undef true`/`false` before Mac/OT
+  headers in any TU that includes the_Foundation headers, and `--start-group`
+  cn_ot+mbedTLS at link.
+
+**Host tests for the pthread layer (2026-09-13).** `tests/test_pthread_classic.c`
+(+ `tests/host/fake_threads.c`, `tests/test.h`) exercises the pure logic of
+`mac/posix/pthread_classic.c` natively: create/join/self, default + recursive
+mutexes, condvar signal + timedwait timeout, `pthread_once`, TLS keys and
+worker-exit destructors, two-thread slots, detach.  The Thread Manager and
+`GetZone`/`SetZone` are faked (`tests/host/{Threads,MacMemory}.h`): `NewThread`
+records a thread and the first `YieldToAnyThread` runs the earliest ready entry
+to completion — enough because the real wait loops yield once before an event
+stops them (the fake scheduler's own file comment states the contract), and
+test worker routines never yield.
+`tests/test_posix_classic.c` covers `mac/posix/posix_classic.c`
+(`clock_gettime`/`nanosleep`/`sched_yield`): `gettimeofday`/`<time.h>` are the
+host's, while the fake's `TickCount()` advances one tick per `YieldToAnyThread`
+(`tests/host/Events.h`), so `nanosleep` terminates deterministically at
+`seconds*60` ticks.  `pthread.h` exposes integer `pthread_*` stand-ins under
+`LAGRANGE_PTHREAD_HOSTTEST` (host `<time.h>`/`<sys/types.h>` do not define the
+target's newlib types); both targets define it.  Run standalone:
+`cmake -S tests -B build-host-tests && ctest --test-dir build-host-tests`, or
+`ctest` from a normal `build-host/` configure (the root does
+`include(CTest)` + `add_subdirectory(tests)`; `BUILD_TESTING` gates it).
 
 ## Tiger AppKit (T-tier UI)
 

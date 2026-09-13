@@ -467,8 +467,9 @@ cmdline) between runs.
     on-device path for a console app is Startup-Items + boot-root log +
     retrieve-log.sh, and the ONLY reason it can launch at all is the real
     creator (a `.bin`/`????` deploy → Finder error -199).
-7. **the_Foundation → L9 (classic Mac) — STARTED, foundation batch landed
-   (2026-09-12, `classicnet-seam`).** This is the core-first slice the user
+7. **the_Foundation → L9 (classic Mac) — the seam CROSS-BUILDS; the
+   pthread/POSIX blocker is resolved (2026-09-13, `classic-mtier`).** This is
+   the core-first slice the user
    chose: cross-build the_Foundation + ClassicNet OT seam for Retro68 (the
    mirror of the darwin8 `d8_tls_smoke`). *Feasibility confirmed + the real
    port surface mapped* — Retro68 ships a genuine POSIX subset (`unistd.h`,
@@ -511,27 +512,62 @@ cmdline) between runs.
    (`mac/tls_smoke.c/.r` + a `LAGRANGE_TFDN_SEAM=ON`-gated `add_subdirectory`
    the_Foundation + `cn_ot` lib in `mac/CMakeLists.txt`) cross-builds the
    `d8_tls_smoke` analog. **DEFAULT `build-mac.sh` (cn_ot_smoke) stays GREEN** —
-   the seam is opt-in while the core's Retro68 port is in flight. **The blocker
-   is now the Retro68 POSIX void the arcana predicted:** the core assumes modern
-   POSIX and Retro68 doesn't provide it fully — `_POSIX_TIMERS`-gated
-   `clock_gettime` (declared but no binding found in the Retro68 sys libs,
-   needs a `time()`-based shim), `struct tm` has NO `tm_gmtoff` (time.c assigns/
-   reads it), `PTHREAD_ONCE_INIT` expands to the undefined `_PTHREAD_ONCE_INIT`
-   (c11threads.h), and more gaps likely surface behind these. This is the focus
-   of the next slice (a `mac/retro68_posix_shim.h` force-included, analogous to
-   darwin8's `darwin8_posix_shim.h`, but far deeper); the on-device `tls_smoke`
-   fetch follows once it cross-builds clean.
-   **Deeper finding (same day) — it's a header INTEROP, not just missing symbols:**
-   `clock_gettime` is `_POSIX_TIMERS`-gated with no binding, and `struct tm` has
-   no `tm_gmtoff` (src/time.c now guards `tm_gmtoff` for `iPlatformClassic`,
-   committed + pushed as `974d92d`). But delivering a `clock_gettime` via a
-   force-included shim (`-include`, which pulls `<time.h>`) BEFORE every TU
-   **disturbs Retro68's `pthread.h` feature-flag setup and silently suppresses
-   its function declarations** — `c11threads.c` then errors `implicit declaration
-   of pthread_mutex_*/pthread_create/…` despite `pthread.h` being included. And
-   pre-defining `PTHREAD_ONCE_INIT`/`{0}`-style macros collides with
-   `MacTypes.h:301`. So `mac/retro68_posix_shim.h` is a DRAFT (unwired draft +
-   the finding are committed); the clean fix must provide `clock_gettime` WITHOUT
-   reordering `pthread.h`'s feature-macro setup (e.g. a `clock_gettime` source
-   compiled into the lib + a Retro68-compatible declaration, not `-include`).
-   This pthread-vs-Classic-Mac-headers interop is THE open Classic port item.
+   the seam is opt-in while the core's Retro68 port is in flight.
+   **RESOLVED (2026-09-13): the Retro68 POSIX/pthread blocker is solved and the
+   `tls_smoke` seam cross-builds clean to a PPC PEF (`build-mac-seam/tls_smoke.bin`
+   + `.APPL`), with the default `cn_ot_smoke` gate still green.** Two corrections
+   to the earlier reading: (a) the `-include` "disturbance" was a red herring — a
+   `-include` of a header that pulls `<time.h>` does NOT suppress `pthread.h`'s
+   declarations (verified with the Retro68 preprocessor); (b) the real root cause
+   is that **Retro68 has no pthread implementation at all** — `<pthread.h>` gates
+   every declaration on `_POSIX_THREADS` (never defined for this target) and no
+   toolchain library defines `pthread_create`/`pthread_mutex_*` (libThreadsLib.a
+   only has NewThread/DisposeThread/GetCurrentThread/YieldToAnyThread). Since
+   the_Foundation is built on a real thread backend, **`mac/posix/` now provides
+   the pthread API over the Thread Manager**: `pthread.h` wins `<pthread.h>` via
+   `include_directories(BEFORE)` and reuses newlib's opaque `sys/_pthreadtypes.h`
+   words as handles into side tables (`pthread_classic.c`: cooperative recursive
+   mutexes, seqlock condvars, TLS, kCooperativeThread threads), while
+   `posix_classic.c` implements `clock_gettime`/`nanosleep`/`sched_yield`.
+   `clock_gettime`/`nanosleep` are declared by a minimal force-included
+   `mac/posix/classic_posix.h`, NOT by `_POSIX_TIMERS`, because that gate makes
+   `<time.h>` pull `<signal.h>`, which in Retro68/Multiverse collides with
+   `<OpenTransport.h>`/`<MacTypes.h>`. Seam fixes needed to reach the green link:
+   `#undef true/false` before the Mac headers (`MacTypes.h` enum vs `<stdbool.h>`),
+   `kCNErrNone` → `noErr` in the OT `CN_SEAM_WAIT`, the `UNISTRING_DIR` name typo
+   (`LIBUNISTRING_RETRO68`), `PCRE2_INCLUDE_DIRS` added to `tfdn_link_depends`
+   (Depends.cmake), `iPlatformClassic` guards for the excluded networkproxy/
+   address/datagram/locale init hooks, skipping `-lpthread` for Classic, and a
+   `--start-group` around cn_ot+mbedTLS (they reference each other via
+   `cn_mac_time`). The the_Foundation submodule edits are **working-tree only** —
+   they need their own `classicnet-seam` commit/push + pin bump. The draft
+   `mac/retro68_posix_shim.h` is deleted.
+   **ON-DEVICE PROOF (2026-09-13): `tls_smoke` fetches
+   `gemini://10.0.2.2:1965/` through iTlsRequest over OT+mbedTLS on the macos9
+   guest — `OK: status '20 text/gemini; char' body=1036 certSubj='CN = localhost'
+   isVerified=1`, reproduced twice.** Evidence (machine-level, gitignored):
+   `~/classic/vm/logs/macos9/tls_smoke.log` + `tls_smoke-confirm.png`; host
+   cross-build `logs/mtier-seam-crossbuild-20260913.log`. Reproduce:
+   `scripts/build-mac.sh --seam` → `~/classic/vm/bin/deploy-qemu.sh --vm macos9
+   build-mac-seam/tls_smoke.APPL` → `run-qemu.sh --vm macos9 --test-raw
+   --headless` (needs the host `starscape/scripts/gemini-test-server.py` on
+   127.0.0.1:1965) → `retrieve-log.sh --vm macos9 tls_smoke.log`.
+   **Two more on-device findings, now baked into the seam:** (1) iTlsRequest must
+   run the fetch on the MAIN thread under `CN_WITH_OT` — Retro68's `malloc` is
+   `NewPtr`, and mbedTLS allocations from a secondary Thread Manager thread fail
+   (`MBEDTLS_ERR_SSL_ALLOC_FAILED`, -32512), which is why the first (worker-thread)
+   attempts died; `submit_TlsRequest` now calls the fetch body directly on OT
+   (d->thread stays NULL). (2) The 128 KB TLS receive buffer is `static`, not a
+   128 KB stack local, so the worker/TLS path doesn't force a huge Thread Manager
+   stack. Also fixed in the harness: `tls_smoke` never called `init_Foundation()`
+   (immediate crash); the seam never mixed RNG entropy
+   (`cn_collect_jitter`+`CN_TlsAddEntropy`, required on classic since there is no
+   HW RNG); and `InitOpenTransport()` moved to `init_TlsRequest` (main thread) —
+   calling it on the worker crashed OS 9. the_Foundation submodule edits remain
+   **working-tree only** (need their own branch/push + pin bump).
+   **Host unit tests added** for the Classic POSIX layer:
+   `tests/test_pthread_classic.c` (fake Thread Manager, `tests/host/`) and
+   `tests/test_posix_classic.c` (fake `TickCount` advancing on yield) — **82
+   checks, green** via `cmake -S tests -B build-host-tests && ctest --test-dir
+   build-host-tests` (and from the root `build-host/` configure). The stock SDL2
+   `build-host/` app build and the Retro68 seam both stay green.

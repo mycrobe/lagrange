@@ -23,6 +23,12 @@
 #include "the_Foundation/tlsrequest.h"
 #include "the_Foundation/string.h"
 
+/* <MacTypes.h> declares true/false as enum constants, colliding with the
+   <stdbool.h> macros the_Foundation pulls in.  Drop them before the Mac
+   headers; the core's iTrue/iFalse then use the enum constants instead. */
+#undef true
+#undef false
+
 #include <Events.h>        /* TickCount */
 #include <MacTypes.h>
 #include <Files.h>         /* FSMakeFSSpec, FSpCreate, FSpOpenDF, FSWrite */
@@ -74,6 +80,7 @@ int main(int argc, char **argv) {
     const char  *path = argc > 3 ? argv[3] : "/";
 
     setvbuf(stdout, NULL, _IOLBF, 0);
+    init_Foundation();   /* required before any iObject/iThread use */
     smoke_teef("[tls_smoke] the_Foundation ClassicNet OT seam: Gemini GET over iTlsRequest\r\n");
 
     int rc = 1;
@@ -89,8 +96,8 @@ int main(int argc, char **argv) {
     iTlsRequest *req = new_TlsRequest();
     setHost_TlsRequest(req, &hostStr, port);
     setContent_TlsRequest(req, &content);
+    setVerifyFunc_TlsRequest(onTofuVerify);   /* before submit: OT fetch is synchronous */
     submit_TlsRequest(req);
-    setVerifyFunc_TlsRequest(onTofuVerify);
     waitForFinished_TlsRequest(req);
 
     const enum iTlsRequestStatus status = status_TlsRequest(req);

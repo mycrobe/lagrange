@@ -1044,6 +1044,14 @@ MimeType=x-scheme-handler/gemini;x-scheme-handler/gopher;x-scheme-handler/sparta
     endif ()
 endif ()
 
+# Host unit tests (portable/mac-layer logic compiled natively with fake
+# platform headers; no Mac or Retro68 needed).  GTEST-free minimal harness;
+# run with `ctest --test-dir <builddir>`.  BUILD_TESTING comes from CTest.
+include (CTest)
+if (BUILD_TESTING)
+    add_subdirectory (tests)
+endif ()
+
 print_summary (
     ENABLE_APP_BUNDLE
     ENABLE_CUSTOM_FRAME

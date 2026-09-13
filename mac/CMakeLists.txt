@@ -68,10 +68,11 @@ target_link_libraries(cn_ot_smoke
 # tls_smoke that does a Gemini fetch through iTlsRequest -- proving lagrange's
 # gmrequest path is portable to Classic before any UI.
 #
-# OPT-IN: the portable core's Retro68 port is still in flight (the Retro68
-# POSIX void -- clock_gettime binding, _PTHREAD_ONCE_INIT, tm_gmtoff, and
-# the rest of the "core assumes modern POSIX" gaps -- is the current work).
-# Default build-mac.sh stays the green cn_ot_smoke gate; build the seam with
+# OPT-IN: the portable core's Retro68 port is in flight.  The Retro68 POSIX
+# void is now answered by the mac/posix/ pthread layer (Thread Manager) plus
+# _POSIX_TIMERS for clock_gettime/nanosleep; the seam still needs to
+# cross-build green before it becomes a default gate.  Default build-mac.sh
+# stays the green cn_ot_smoke gate; build the seam with
 #   cmake -S mac -B build-mac -DCMAKE_TOOLCHAIN_FILE=... -DLAGRANGE_TFDN_SEAM=ON
 option (LAGRANGE_TFDN_SEAM "Build the the_Foundation + ClassicNet OT seam (L9)" OFF)
 if (LAGRANGE_TFDN_SEAM)
@@ -99,10 +100,34 @@ set (TFDN_ENABLE_SSE41        OFF CACHE BOOL "" FORCE)   # no SSE on PPC
 set (TFDN_ENABLE_DEBUG_OUTPUT OFF CACHE BOOL "" FORCE)
 set (TFDN_ENABLE_MUTEX_DEBUG  OFF CACHE BOOL "" FORCE)
 # Retro68 static deps (the fork's RestroPPC Depends branch reads these):
-set (UNISTRING_DIR   "${LIBUNISTRING_RETRO68}" CACHE PATH "" FORCE)
+set (UNISTRING_DIR   "${UNISTRING_RETRO68}"    CACHE PATH "" FORCE)
 set (UNISTRING_ICONV NO                        CACHE BOOL "" FORCE)
 set (PCRE2_ROOT      "${PCRE2_RETRO68}"        CACHE PATH "" FORCE)
 set (ZLIB_ROOT       "${ZLIB_RETRO68}"         CACHE PATH "" FORCE)
+
+# --- Classic POSIX/pthread layer (Mac OS Thread Manager) --------------------
+# Retro68 ships newlib's RTEMS-flavored <pthread.h>, but NO library implements
+# the API: every declaration is gated on `_POSIX_THREADS` (undefined for this
+# target in <sys/features.h>), and no static lib defines pthread_create/
+# pthread_mutex_* (libThreadsLib.a only has NewThread/DisposeThread/
+# GetCurrentThread/YieldToAnyThread).  the_Foundation, though, is built on a
+# real thread backend: iThread/iMutex/iCondition -> C11 threads -> pthreads,
+# and the ClassicNet iTlsRequest seam runs its fetch on a worker thread.
+# mac/posix/ provides that pthread API over the Thread Manager, plus
+# clock_gettime/nanosleep/sched_yield.  `include_directories(BEFORE)` makes our
+# <pthread.h> win the search; clock_gettime/nanosleep are declared by a minimal
+# force-included header (classic_posix.h) rather than by switching on
+# `_POSIX_TIMERS`, because that gate makes <time.h> pull <signal.h>, which in
+# Retro68/Multiverse collides with <OpenTransport.h>/<MacTypes.h> everywhere.
+set (CLASSIC_POSIX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/posix")
+include_directories (BEFORE ${CLASSIC_POSIX_DIR})
+add_compile_options (-include ${CLASSIC_POSIX_DIR}/classic_posix.h)
+list (APPEND CMAKE_REQUIRED_INCLUDES ${CLASSIC_POSIX_DIR})
+add_library (classic_posix STATIC
+    ${CLASSIC_POSIX_DIR}/pthread_classic.c
+    ${CLASSIC_POSIX_DIR}/posix_classic.c)
+target_include_directories (classic_posix PUBLIC ${CLASSIC_POSIX_DIR})
+target_link_libraries (classic_posix PUBLIC ThreadsLib)
 
 add_subdirectory (${CMAKE_CURRENT_SOURCE_DIR}/../lib/the_Foundation
                   ${CMAKE_CURRENT_BINARY_DIR}/the_Foundation)
@@ -142,7 +167,7 @@ if (TARGET the_Foundation)
         ${CLASSICNET_DIR}/include
         ${CN_TGT}
         ${MBEDTLS_PPC_ROOT}/include)
-    target_link_libraries (the_Foundation PUBLIC cn_ot)
+    target_link_libraries (the_Foundation PUBLIC cn_ot classic_posix)
     # Retro68: libunistring's unitypes.h -> unistring/stdint.h #defines the
     # exact-width int types to unistring_uint32_t (unsigned int) on non-glibc,
     # while Retro68's system uint32_t is `unsigned long` (PPC32 ILP32: both
@@ -154,14 +179,11 @@ if (TARGET the_Foundation)
         -Wno-error=incompatible-pointer-types
         -Wno-incompatible-pointer-types
         -Wno-format)
-    # Retro68 POSIX void (clock_gettime has no binding + is _POSIX_TIMERS-gated;
-    # struct tm has no tm_gmtoff).  Draft shim in mac/retro68_posix_shim.h, and
-    # src/time.c now guards tm_gmtoff for iPlatformClassic.  Delivering
-    # clock_gettime via -include is NOT yet wired: force-including <time.h>
-    # before every TU disturbs Retro68's pthread.h feature-flag setup and
-    # silently suppresses its function declarations (c11threads.c -> implicit
-    # pthread_mutex_*/pthread_create).  The POSIX-threads-vs-Classic-Mac
-    # headers interop is the open item; see docs/arcana.md.
+    # Retro68 POSIX void: clock_gettime/nanosleep are declared by <time.h>
+    # under _POSIX_TIMERS (defined above) and implemented in mac/posix/;
+    # struct tm has no tm_gmtoff, guarded in src/time.c for iPlatformClassic.
+    # pthreads are provided over the Thread Manager by classic_posix (linked
+    # above); see mac/posix/pthread.h for the full rationale.
 endif ()
 
 # --- the_Foundation seam fetch proof: a Gemini fetch through iTlsRequest over
@@ -172,7 +194,18 @@ add_application (tls_smoke CONSOLE TYPE "APPL" CREATOR "CnOs"
         tls_smoke.r
 )
 target_link_libraries (tls_smoke
+    # cn_ot (which owns cn_mac_time.o) and mbedTLS reference each other
+    # (mbedTLS's platform time macros call cn_mac_time/mbedtls_ms_time/
+    # mbedtls_platform_gmtime_r, defined in cn_mac_time.o), so the static
+    # archives must be resolved together -- a plain left-to-right pass leaves
+    # one side unresolved.
+    -Wl,--start-group
     the_Foundation::the_Foundation
+    cn_ot
+    ${MBEDTLS_PPC_ROOT}/build-ppc/library/libmbedtls.a
+    ${MBEDTLS_PPC_ROOT}/build-ppc/library/libmbedx509.a
+    ${MBEDTLS_PPC_ROOT}/build-ppc/library/libmbedcrypto.a
+    -Wl,--end-group
     OpenTransportAppPPC OpenTransportLib OpenTptInternetLib
     ThreadsLib)
 endif ()  # LAGRANGE_TFDN_SEAM

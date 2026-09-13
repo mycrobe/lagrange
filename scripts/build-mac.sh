@@ -7,6 +7,8 @@
 # classic Mac OS before any UI.
 #
 #   scripts/build-mac.sh           -> build-mac/cn_ot_smoke.bin (+ .APPL)
+#   scripts/build-mac.sh --seam    -> build-mac-seam/ (the_Foundation +
+#                                     ClassicNet OT seam + tls_smoke.bin)
 #   scripts/build-mac.sh --debug   -> build-mac-debug/ (trace build)
 #
 # Prereqs:
@@ -35,6 +37,7 @@ EXTRA=("${EXTRA[@]:-}")
 while [ $# -gt 0 ]; do
     case "$1" in
         --debug) EXTRA=(-DCMAKE_BUILD_TYPE=Debug); BDIR="$ROOT/build-mac-debug" ;;
+        --seam)  EXTRA+=(-DLAGRANGE_TFDN_SEAM=ON); BDIR="$ROOT/build-mac-seam" ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
     shift
@@ -47,5 +50,10 @@ cmake -S "$ROOT/mac" -B "$BDIR" \
 cmake --build "$BDIR" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 
 echo
-echo "built: $BDIR/cn_ot_smoke.bin"
-echo "  push to the guest: ~/classic/vm/bin/deploy-qemu.sh --vm macos9 $BDIR/cn_ot_smoke.bin"
+if [ "$BDIR" = "$ROOT/build-mac-seam" ]; then
+    echo "built: $BDIR/tls_smoke.bin (+ cn_ot_smoke.bin)"
+    echo "  push to the guest: ~/classic/vm/bin/deploy-qemu.sh --vm macos9 $BDIR/tls_smoke.bin"
+else
+    echo "built: $BDIR/cn_ot_smoke.bin"
+    echo "  push to the guest: ~/classic/vm/bin/deploy-qemu.sh --vm macos9 $BDIR/cn_ot_smoke.bin"
+fi
